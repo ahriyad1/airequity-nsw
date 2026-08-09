@@ -1,0 +1,44 @@
+name: AirEquity scheduled pipeline
+
+on:
+  schedule:
+    - cron: "15 * * * *" # hourly, 15 minutes past
+  workflow_dispatch: # allows manual runs for demos
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Ingest observations
+        run: python -m src.ingest.fetch_observations
+
+      - name: Ingest weather forecasts
+        run: python -m src.ingest.fetch_weather
+
+      - name: Build features
+        run: python -m src.features.build
+
+      - name: Generate forecasts
+        run: python -m src.models.predict
+
+      - name: Log forecast error (model monitoring)
+        run: python -m src.models.log_error
+
+      - name: Upload run artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-run-${{ github.run_number }}
+          path: |
+            logs/
+            data/processed/forecasts_latest.parquet
+          retention-days: 14
