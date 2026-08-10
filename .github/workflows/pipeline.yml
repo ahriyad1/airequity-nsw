@@ -1,9 +1,7 @@
 name: AirEquity scheduled pipeline
 
 on:
-  schedule:
-    - cron: "15 * * * *" # hourly, 15 minutes past
-  workflow_dispatch: # allows manual runs for demos
+  workflow_dispatch:
 
 jobs:
   run-pipeline:
