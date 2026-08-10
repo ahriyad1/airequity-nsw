@@ -1,11 +1,11 @@
 <mxfile host="app.diagrams.net" agent="AirEquity">
   <diagram name="AirEquity Architecture" id="airequity-arch-1">
-    <mxGraphModel dx="1186" dy="801" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="826" math="0" shadow="0">
+    <mxGraphModel dx="1186" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="826" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
-        <mxCell id="title" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=16;fontStyle=1;fontColor=#1F1A4D;" value="AirEquity — Threshold-Crossing Air Quality Forecasting for Unmonitored Communities in NSW" vertex="1">
-          <mxGeometry height="30" width="960" x="250" y="10" as="geometry" />
+        <mxCell id="title" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=16;fontStyle=1;fontColor=#1F1A4D;" value="AirEquity — Threshold-Crossing Air Quality Forecasting for Unmonitored Communities in NSW" vertex="1">
+          <mxGeometry height="30" width="960" x="140" y="20" as="geometry" />
         </mxCell>
         <mxCell id="srcLabel" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=10;fontStyle=1;fontColor=#666666;" value="DATA SOURCES" vertex="1">
           <mxGeometry height="20" width="150" x="30" y="110" as="geometry" />
@@ -16,7 +16,7 @@
         <mxCell id="src2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f8;strokeColor=#1F1A4D;fontColor=#1F1A4D;fontSize=11;fontStyle=1" value="Open-Meteo API&#xa;&lt;font style=&quot;font-size: 9px;&quot;&gt;Forecast weather covariates&#xa;Keyless, free&lt;/font&gt;" vertex="1">
           <mxGeometry height="60" width="160" x="30" y="215" as="geometry" />
         </mxCell>
-        <mxCell id="src3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f8;strokeColor=#1F1A4D;fontColor=#1F1A4D;fontSize=11;fontStyle=1" value="ABS SEIFA&#xa;&lt;font style=&quot;font-size: 9px;&quot;&gt;Socioeconomic index&#xa;for equity analysis&lt;/font&gt;" vertex="1">
+        <mxCell id="src3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f8;strokeColor=#1F1A4D;fontColor=#1F1A4D;fontSize=11;fontStyle=1" value="ABS SEIFA&#xa;&lt;font style=&quot;font-size: 9px;&quot;&gt;Socioeconomic index&#xa;Equity analysis only —&#xa;not a model input&lt;/font&gt;" vertex="1">
           <mxGeometry height="60" width="160" x="30" y="290" as="geometry" />
         </mxCell>
         <mxCell id="c1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#B01C2E;strokeWidth=2;fontColor=#B01C2E;fontSize=11;fontStyle=1" value="1. ACQUISITION&#xa;&lt;font style=&quot;font-size: 9px;&quot;&gt;Scheduled Python ingestion&#xa;Schema validation, retries&lt;/font&gt;" vertex="1">
@@ -43,7 +43,7 @@
         <mxCell id="gov" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fdf0f2;strokeColor=#B01C2E;strokeWidth=2;fontColor=#B01C2E;fontSize=11;fontStyle=1" value="GOVERNANCE LAYER&#xa;&lt;font style=&quot;font-size: 9px;&quot;&gt;Environmental justice (error vs SEIFA) · cost-asymmetric thresholds · uncertainty disclosure for unmonitored sites · data lineage · API fail-safe with staleness warning&lt;/font&gt;" vertex="1">
           <mxGeometry height="65" width="760" x="240" y="555" as="geometry" />
         </mxCell>
-        <mxCell id="loso" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fffbe6;strokeColor=#D6A100;fontColor=#7a5c00;fontSize=10;dashed=1" value="LOSO validation&#xa;&lt;font style=&quot;font-size: 9px;&quot;&gt;Hide one station, predict it blind,&#xa;compare to actual. Repeat ×21.&#xa;Gap = reliability loss.&lt;/font&gt;" vertex="1">
+        <mxCell id="loso" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fffbe6;strokeColor=#D6A100;fontColor=#7a5c00;fontSize=10;dashed=1" value="LOSO validation&#xa;&lt;font style=&quot;font-size: 9px;&quot;&gt;Hide one station, predict it blind,&#xa;compare to actual. Repeat per station.&#xa;Gap = reliability loss.&lt;/font&gt;" vertex="1">
           <mxGeometry height="80" width="120" x="1030" y="185" as="geometry" />
         </mxCell>
         <mxCell id="e1" edge="1" parent="1" source="src1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#4CAF80;strokeWidth=2;endArrow=block;" target="c1">
