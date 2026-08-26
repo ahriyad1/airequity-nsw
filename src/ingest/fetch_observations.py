@@ -2,8 +2,20 @@
 Fetch air quality observations from the NSW Air Quality API
 
 Card: AIR-9 — Build NSW Air Quality API ingestion script
-"""
 
+This script:
+1. Retrieves monitoring station information from the NSW Air Quality API.
+2. Filters the stations to real Sydney monitoring stations.
+3. Retrieves available air-quality parameters.
+4. Fetches hourly observations for selected sites and date ranges.
+5. Splits large requests into smaller date chunks to avoid API timeouts.
+6. Retries failed API requests using exponential backoff.
+7. Validates the returned observation records.
+8. Saves the raw observations as JSON files in data/raw/.
+9. Reports any failed requests at the end of the program.
+
+"""
+# Importing all the packages
 import argparse
 import json
 import sys
@@ -12,6 +24,9 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import requests
+
+# API CONFIGURATION
+# Setting up Links and sites from where we are getting all the data
 
 BASE = "https://data.airquality.nsw.gov.au"
 SITES_URL = f"{BASE}/api/Data/get_SiteDetails"
@@ -32,12 +47,28 @@ RAW_DIR = Path("data/raw")
 # excluded by filter_real_stations() below.
 SYDNEY_REGIONS = {"Sydney East", "Sydney South-west", "Sydney North-west"}
 
+
+
+# Parameters downloaded when the user does not specify --parameters.
+#
+# PM2.5  = fine particulate matter
+# PM10   = particulate matter
+# OZONE  = ozone concentration
+# NO2    = nitrogen dioxide concentration
+# TEMP   = temperature
+# HUMID  = humidity
+# WSP    = wind speed
+# WDR    = wind direction
+# SOLAR  = solar radiation
+# RAIN   = rainfall
+
+
 DEFAULT_PARAMETERS = ["PM2.5", "PM10", "OZONE", "NO2",
                       "TEMP", "HUMID", "WSP", "WDR", "SOLAR", "RAIN"]
 
 
 # API helpers
-
+# related modular functions to do simple unit tasks
 def _request(method, url, payload=None):
     for attempt in range(1, MAX_RETRIES + 1):
         try:
