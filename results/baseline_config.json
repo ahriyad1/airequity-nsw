@@ -1,0 +1,11 @@
+{
+  "threshold_ug_m3": 25.0,
+  "horizon_hours": 24,
+  "cost_ratio_miss_to_false_alarm": 10.0,
+  "bayes_optimal_threshold": 0.09090909090909091,
+  "train_year": 2023,
+  "test_year": 2024,
+  "train_rows": 126442,
+  "test_rows": 127952,
+  "test_positive_rate": 0.007659122170814056
+}
