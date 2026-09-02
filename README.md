@@ -137,3 +137,33 @@ Full register in `docs/ethics_register.md`. Summary:
 ## Change log
 
 Significant design changes are recorded in `docs/decisions.md` with date and rationale.
+## Streamlit Dashboard
+
+AirEquity includes an interactive Streamlit dashboard for exploring PM2.5 exposure across 18 operational monitoring stations in Greater Sydney.
+
+### Dashboard features
+
+- Station selector
+- PM2.5 hourly trend chart
+- 25 µg/m³ health-threshold reference line
+- Interactive Sydney station map
+- Station threshold-crossing rates
+- Regional exposure comparison
+- Smoke-event explorer for 10–14 September 2023
+
+### Regional exposure finding
+
+| Region | Crossing rate |
+|---|---:|
+| Sydney North-west | 1.60% |
+| Sydney South-west | 1.06% |
+| Sydney East | 0.81% |
+
+Sydney North-west records approximately twice the threshold-crossing rate observed in Sydney East.
+
+### Run the dashboard
+
+Install dependencies:
+
+```bash
+pip install streamlit plotly pandas pyarrow
