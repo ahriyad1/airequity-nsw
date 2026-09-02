@@ -7,6 +7,11 @@ Run from repository root:
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
+import sys
+import urllib.request
+import zipfile
 from pathlib import Path
 
 import numpy as np
@@ -22,6 +27,14 @@ DEFAULT_STATION_START = pd.Timestamp("2023-09-01")
 DEFAULT_STATION_END = pd.Timestamp("2023-09-30")
 DEFAULT_EVENT_START = pd.Timestamp("2023-09-10")
 DEFAULT_EVENT_END = pd.Timestamp("2023-09-14")
+
+# Prepared observation data is distributed as a GitHub Release asset rather
+# than committed to Git. Streamlit Community Cloud can bootstrap it on first run.
+DATA_RELEASE_URL = (
+    "https://github.com/ahriyad1/airequity-nsw/releases/"
+    "download/v0.1-data/observations.zip"
+)
+SUPPORTED_YEARS = {"year=2023", "year=2024"}
 
 st.set_page_config(
     page_title="AirEquity NSW",
@@ -145,6 +158,53 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+# -----------------------------------------------------------------------------
+# First-run data bootstrap for Streamlit Community Cloud
+# -----------------------------------------------------------------------------
+def ensure_dashboard_data() -> None:
+    """Restore dashboard data on a fresh cloud container."""
+    if OBS_PATH.exists() and FEATURES_PATH.exists():
+        return
+
+    data_root = Path("data")
+    processed_root = data_root / "processed"
+    processed_root.mkdir(parents=True, exist_ok=True)
+
+    if not OBS_PATH.exists():
+        with st.spinner("Preparing 2023–2024 dashboard data for the first run…"):
+            archive = data_root / "observations-release.zip"
+            urllib.request.urlretrieve(DATA_RELEASE_URL, archive)
+            with zipfile.ZipFile(archive) as zf:
+                zf.extractall(processed_root)
+            archive.unlink(missing_ok=True)
+
+            if OBS_PATH.exists():
+                for child in OBS_PATH.iterdir():
+                    if (
+                        child.is_dir()
+                        and child.name.startswith("year=")
+                        and child.name not in SUPPORTED_YEARS
+                    ):
+                        shutil.rmtree(child)
+
+    if not FEATURES_PATH.exists():
+        with st.spinner("Building 24-hour threshold labels and dashboard features…"):
+            result = subprocess.run(
+                [sys.executable, "-m", "src.features.build_features"],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                details = (result.stderr or result.stdout or "Unknown feature-build error").strip()
+                raise RuntimeError(
+                    "Feature generation failed: " + details[-1600:]
+                )
+
+
+ensure_dashboard_data()
+
 
 # -----------------------------------------------------------------------------
 # Data loading
@@ -406,7 +466,7 @@ trend.update_layout(
     hovermode="x unified",
     showlegend=False,
 )
-st.plotly_chart(trend, use_container_width=True, theme=None, config={"displayModeBar": False, "displaylogo": False})
+st.plotly_chart(trend, width="stretch", theme=None, config={"displayModeBar": False, "displaylogo": False})
 st.markdown('</div>', unsafe_allow_html=True)
 
 st.write("")
@@ -455,7 +515,7 @@ with left:
             zoom=8.25,
         ),
     )
-    st.plotly_chart(map_fig, use_container_width=True, theme=None, config={"displayModeBar": False, "displaylogo": False})
+    st.plotly_chart(map_fig, width="stretch", theme=None, config={"displayModeBar": False, "displaylogo": False})
     st.markdown('</div>', unsafe_allow_html=True)
 
 with right:
@@ -492,7 +552,7 @@ with right:
         yaxis=dict(title="", showgrid=False),
         font=dict(color="#243b53"),
     )
-    st.plotly_chart(bar, use_container_width=True, theme=None, config={"displayModeBar": False, "displaylogo": False})
+    st.plotly_chart(bar, width="stretch", theme=None, config={"displayModeBar": False, "displaylogo": False})
 
     nw = regional[regional["region"] == "Sydney North-west"]
     east = regional[regional["region"] == "Sydney East"]
@@ -567,7 +627,7 @@ else:
         legend=dict(orientation="h", y=1.12, x=0, font=dict(size=10)),
         hovermode="x unified",
     )
-    st.plotly_chart(event_fig, use_container_width=True, theme=None, config={"displayModeBar": False, "displaylogo": False})
+    st.plotly_chart(event_fig, width="stretch", theme=None, config={"displayModeBar": False, "displaylogo": False})
 
     if peak_value > 400:
         st.markdown(
