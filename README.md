@@ -5,6 +5,11 @@
 PRT661 Data Science Practice · Charles Darwin University · Semester 2, 2026
 Theme 2 — Predictive Analytics and Forecasting
 
+
+## 🌐 Live Dashboard
+
+**AirEquity NSW Streamlit Dashboard:**  
+https://airequity-nsw.streamlit.app
 ---
 
 ## What this project does
