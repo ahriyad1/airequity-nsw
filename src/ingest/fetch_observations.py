@@ -1,7 +1,7 @@
 """
 Fetch air quality observations from the NSW Air Quality API
 
-Card: AIR-9 — Build NSW Air Quality API ingestion script
+Build NSW Air Quality API ingestion script
 
 This script:
 1. Retrieves monitoring station information from the NSW Air Quality API.
@@ -180,6 +180,9 @@ def main():
         return
 
     sites = get_sites()
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
+    with open(RAW_DIR / "sites.json", "w") as f:
+        json.dump(sites, f, indent=2)
     sydney = filter_real_stations(sites, SYDNEY_REGIONS)
 
     if args.list_sites:
