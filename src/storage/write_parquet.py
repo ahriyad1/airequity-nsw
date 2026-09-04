@@ -126,6 +126,9 @@ def main():
     df["year"] = df["timestamp"].dt.year
     df["month"] = df["timestamp"].dt.month
 
+    import shutil
+    if OUT_DIR.exists():
+        shutil.rmtree(OUT_DIR)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     df.to_parquet(OUT_DIR, partition_cols=["year", "month"], index=False)
 
