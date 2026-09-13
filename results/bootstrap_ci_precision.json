@@ -1,0 +1,40 @@
+{
+  "metric": "precision",
+  "n_stations": 18,
+  "n_bootstrap": 10000,
+  "mean_by_condition": {
+    "monitored": 0.356,
+    "unmonitored": 0.305,
+    "weather_only": 0.2423
+  },
+  "sensor_gap": {
+    "observed": 0.051,
+    "ci_low": 0.0178,
+    "ci_high": 0.0847,
+    "relative": 0.1432,
+    "relative_ci_low": 0.05,
+    "relative_ci_high": 0.2381,
+    "stations_positive": 15,
+    "stations_nonzero": 18,
+    "sign_test_p": 0.0075,
+    "ci_excludes_zero": true
+  },
+  "spatial_gap": {
+    "observed": 0.0626,
+    "ci_low": 0.0223,
+    "ci_high": 0.1061,
+    "relative": 0.2054,
+    "relative_ci_low": 0.0733,
+    "relative_ci_high": 0.3479,
+    "stations_positive": 14,
+    "stations_nonzero": 18,
+    "sign_test_p": 0.0309,
+    "ci_excludes_zero": true
+  },
+  "spatial_minus_sensor": {
+    "observed": 0.0116,
+    "ci_low": -0.0528,
+    "ci_high": 0.0755,
+    "ci_excludes_zero": false
+  }
+}
