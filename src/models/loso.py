@@ -32,9 +32,39 @@ CALENDAR = ["hour", "dayofweek", "month", "is_weekend",
             "hour_sin", "hour_cos", "month_sin", "month_cos"]
 GEO = ["latitude", "longitude"]
 
-def feature_sets():
+def feature_sets(df):
+    """Split columns into the three experimental conditions."""
+    spatial = [c for c in df.columns if c.startswith(SPATIAL_PREFIX)]
+    own = [c for c in df.columns
+           if c.startswith(OWN_SENSOR_PREFIXES) or c in OWN_SENSOR_EXACT]
+    weather = [c for c in WEATHER if c in df.columns]
+    cal = [c for c in CALENDAR if c in df.columns]
+    geo = [c for c in GEO if c in df.columns]
+
+    weather_only = weather + cal + geo
+    unmonitored = spatial + weather_only
+    monitored = unmonitored + [c for c in own if c != "target_pm25_future"]
+    return {"monitored": monitored,
+            "unmonitored": unmonitored,
+            "weather_only": weather_only}
+
 
 def make_model():
+    """
+    Gradient-boosted trees, no class weighting.
+
+    Imbalance is handled at the decision threshold instead. LightGBM is
+    preferred but requires libomp, which is unavailable on some systems;
+    scikit-learn's HistGradientBoosting is an equivalent fallback.
+    """
+    if HAVE_LGBM:
+        return LGBMClassifier(
+            n_estimators=300, learning_rate=0.05, num_leaves=31,
+            min_child_samples=50, subsample=0.8, colsample_bytree=0.8,
+            verbose=-1, random_state=42)
+    return HistGradientBoostingClassifier(
+        max_iter=300, learning_rate=0.05, max_leaf_nodes=31,
+        min_samples_leaf=50, random_state=42)
 
 def metrics():
 
