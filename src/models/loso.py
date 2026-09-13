@@ -66,11 +66,59 @@ def make_model():
         max_iter=300, learning_rate=0.05, max_leaf_nodes=31,
         min_samples_leaf=50, random_state=42)
 
-def metrics():
+def metrics(y_true, y_prob, threshold, cost_ratio):
+    y_pred = (y_prob >= threshold).astype(int)
+    tp = int(((y_true == 1) & (y_pred == 1)).sum())
+    fp = int(((y_true == 0) & (y_pred == 1)).sum())
+    fn = int(((y_true == 1) & (y_pred == 0)).sum())
+    tn = int(((y_true == 0) & (y_pred == 0)).sum())
+    n = len(y_true)
 
-def fit_predict():
+    recall = tp / (tp + fn) if (tp + fn) else 0.0
+    precision = tp / (tp + fp) if (tp + fp) else 0.0
+    f1 = (2 * precision * recall / (precision + recall)
+          if (precision + recall) else 0.0)
+    return {
+        "recall": round(recall, 4),
+        "precision": round(precision, 4),
+        "f1": round(f1, 4),
+        "brier": round(float(np.mean((y_prob - y_true) ** 2)), 5),
+        "cost_weighted_loss": round((cost_ratio * fn + fp) / n, 5),
+        "tp": tp, "fp": fp, "fn": fn, "tn": tn,
+        "n_events": int(y_true.sum()), "n_rows": n,
+    }
 
-def threshold_sweep():
+
+def fit_predict(df, held_out, feats):
+    """Train on all stations except held_out; return probabilities for it."""
+    train = df[df["site_id"] != held_out]
+    test = df[df["site_id"] == held_out]
+
+    ytr = train["label"].astype(int).values
+    yte = test["label"].astype(int).values
+    if ytr.sum() == 0 or yte.sum() == 0:
+        return None, None
+
+    model = make_model()
+    model.fit(train[feats], ytr)
+    return model.predict_proba(test[feats])[:, 1], yte
+
+def threshold_sweep(prob, true, cost_ratio):
+    """Sweep decision thresholds to find the cost-optimal operating point."""
+    rows = []
+    for t in np.arange(0.005, 0.505, 0.005):
+        pred = (prob >= t).astype(int)
+        tp = int(((true == 1) & (pred == 1)).sum())
+        fp = int(((true == 0) & (pred == 1)).sum())
+        fn = int(((true == 1) & (pred == 0)).sum())
+        rows.append({
+            "threshold": round(float(t), 3),
+            "recall": round(tp / max(tp + fn, 1), 4),
+            "precision": round(tp / max(tp + fp, 1), 4),
+            "cost_weighted_loss": round((cost_ratio * fn + fp) / len(true), 5),
+            "flagged_pct": round(float(pred.mean()) * 100, 2),
+        })
+    return pd.DataFrame(rows)
 
 def main():
 
