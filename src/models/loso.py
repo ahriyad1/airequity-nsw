@@ -121,6 +121,187 @@ def threshold_sweep(prob, true, cost_ratio):
     return pd.DataFrame(rows)
 
 def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--cost-ratio", type=float, default=10.0,
+                    help="Cost of a missed crossing relative to a false alarm")
+    ap.add_argument("--decision-threshold", type=float, default=None,
+                    help="Default: Bayes-optimal 1/(1+cost_ratio)")
+    ap.add_argument("--no-sweep", action="store_true",
+                    help="Skip the threshold sweep")
+    ap.add_argument("--verbose", action="store_true",
+                    help="Print per-fold probability diagnostics")
+    args = ap.parse_args()
+
+    tau = args.decision_threshold or 1.0 / (1.0 + args.cost_ratio)
+
+    print("Loading spatial features...")
+    df = pd.read_parquet(FEATURES_DIR)
+    df = df.dropna(subset=["label"])
+    df["label"] = df["label"].astype(int)
+
+    feats_by_cond = feature_sets(df)
+
+    print(f"  {len(df):,} rows, {df['site_id'].nunique()} stations, "
+          f"{df['label'].mean():.2%} positive")
+    print(f"  monitored condition    : "
+          f"{len(feats_by_cond['monitored'])} features (adds own-sensor history)")
+    print(f"  unmonitored condition  : "
+          f"{len(feats_by_cond['unmonitored'])} features "
+          f"(spatial, weather, calendar, geography)")
+    print(f"  weather-only condition : "
+          f"{len(feats_by_cond['weather_only'])} features "
+          f"(ablation — no spatial neighbours)")
+    print(f"  model                  : "
+          f"{'LightGBM' if HAVE_LGBM else 'HistGradientBoosting'}")
+    print(f"  decision threshold     : {tau:.3f} "
+          f"(cost ratio {args.cost_ratio}:1)")
+
+    sites = sorted(df["site_id"].unique())
+    rows = []
+    pooled = {c: ([], []) for c in CONDITIONS}
+
+    print(f"\nRunning {len(sites)} folds x {len(CONDITIONS)} conditions...")
+    for i, sid in enumerate(sites, 1):
+        info = df.loc[df["site_id"] == sid].iloc[0]
+        name, region = info["site_name"], info["region"]
+        nearest = float(info["spatial_nearest_dist"])
+
+        fold = {}
+        for cond in CONDITIONS:
+            prob, yte = fit_predict(df, sid, feats_by_cond[cond])
+            if prob is None:
+                continue
+            pooled[cond][0].append(prob)
+            pooled[cond][1].append(yte)
+
+            m = metrics(yte, prob, tau, args.cost_ratio)
+            fold[cond] = m
+            rows.append({"site_id": sid, "site_name": name, "region": region,
+                         "nearest_station_km": round(nearest, 1),
+                         "condition": cond, **m})
+
+            if args.verbose:
+                print(f"      {cond:<13} prob mean {prob.mean():.4f}, "
+                      f"flagged {(prob >= tau).mean():.1%}")
+
+        if {"monitored", "unmonitored"} <= set(fold):
+            gap = fold["monitored"]["recall"] - fold["unmonitored"]["recall"]
+            wo = fold.get("weather_only", {}).get("recall", float("nan"))
+            print(f"  {i:>2}/{len(sites)}  {name:<20} "
+                  f"recall {fold['monitored']['recall']:.3f} -> "
+                  f"{fold['unmonitored']['recall']:.3f} -> {wo:.3f}  "
+                  f"(sensor gap {gap:+.3f}, "
+                  f"{fold['unmonitored']['n_events']} events)")
+
+    res = pd.DataFrame(rows)
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    res.to_csv(RESULTS_DIR / "loso_results.csv", index=False)
+
+    # ---- condition comparison --------------------------------------
+    print("\n" + "=" * 78)
+    print("CONDITION COMPARISON: monitored, unmonitored, weather-only")
+    print("=" * 78)
+    summary = (res.groupby("condition")[
+        ["recall", "precision", "f1", "brier", "cost_weighted_loss"]]
+        .mean().round(4).reindex(CONDITIONS))
+    print(summary.to_string())
+
+    mon = res[res.condition == "monitored"]["recall"].mean()
+    unm = res[res.condition == "unmonitored"]["recall"].mean()
+    wth = res[res.condition == "weather_only"]["recall"].mean()
+
+    print(f"\nMean recall with own sensor     : {mon:.3f}")
+    print(f"Mean recall without own sensor  : {unm:.3f}")
+    print(f"Mean recall without spatial     : {wth:.3f}")
+    print(f"\nReliability penalty (no sensor)  : {(mon - unm) / mon:.1%} "
+          f"of monitored recall")
+    print(f"Spatial feature contribution     : {(unm - wth) / unm:.1%} "
+          f"of unmonitored recall")
+
+
+
+    # ---- per-station breakdown -------------------------------------
+    piv = res.pivot_table(index=["site_name", "region", "nearest_station_km"],
+                          columns="condition", values="recall").reset_index()
+    piv["sensor_gap"] = piv["monitored"] - piv["unmonitored"]
+    piv["spatial_gap"] = piv["unmonitored"] - piv["weather_only"]
+    piv = piv.sort_values("sensor_gap", ascending=False)
+
+    print("\n" + "=" * 78)
+    print("PER-STATION RECALL BY CONDITION (largest sensor gap first)")
+    print("=" * 78)
+    print(piv.round(3).to_string(index=False))
+
+    c = piv["sensor_gap"].corr(piv["nearest_station_km"])
+    print(f"\ncorr(sensor gap, distance to nearest station) = {c:.3f}")
+    print("  Weak — penalty is not simply a function of distance"
+          if abs(c) < 0.3 else "  Isolated stations suffer a larger penalty")
+
+    print("\nMean sensor gap by region")
+    print(piv.groupby("region")["sensor_gap"].mean().round(3).to_string())
+    piv.to_csv(RESULTS_DIR / "loso_reliability_gap.csv", index=False)
+
+    # ---- threshold sweep -------------------------------------------
+    best_by_cond = {}
+    if not args.no_sweep:
+        print("\n" + "=" * 78)
+        print("THRESHOLD SWEEP (pooled across all folds)")
+        print("=" * 78)
+        print("Note: the optimum is selected on the same folds it is "
+              "evaluated on, so it\nis mildly optimistic. In deployment the "
+              "threshold would be fixed using\nout-of-fold validation on an "
+              "earlier time partition.\n")
+
+        baseline_cost = args.cost_ratio * df["label"].mean()
+        print(f"Always-negative cost-weighted loss: {baseline_cost:.5f}\n")
+
+        for cond in CONDITIONS:
+            prob = np.concatenate(pooled[cond][0])
+            true = np.concatenate(pooled[cond][1])
+            sweep = threshold_sweep(prob, true, args.cost_ratio)
+            best = sweep.loc[sweep["cost_weighted_loss"].idxmin()]
+            best_by_cond[cond] = best
+
+            print(f"{cond}")
+            print(sweep.iloc[::10][["threshold", "recall", "precision",
+                                    "cost_weighted_loss", "flagged_pct"]]
+                  .to_string(index=False))
+            print(f"  optimal threshold {best['threshold']}: "
+                  f"recall {best['recall']:.3f}, "
+                  f"precision {best['precision']:.3f}, "
+                  f"cost {best['cost_weighted_loss']:.5f}")
+            verdict = ("BEATS" if best["cost_weighted_loss"] < baseline_cost
+                       else "does NOT beat")
+            improvement = (1 - best["cost_weighted_loss"] / baseline_cost) * 100
+            print(f"  model {verdict} predicting nothing "
+                  f"({best['cost_weighted_loss']:.5f} vs {baseline_cost:.5f}, "
+                  f"{improvement:+.0f}%)\n")
+
+            sweep.to_csv(RESULTS_DIR / f"threshold_sweep_{cond}.csv",
+                         index=False)
+
+    # ---- lineage ----------------------------------------------------
+    with open(RESULTS_DIR / "loso_config.json", "w") as f:
+        json.dump({
+            "model": "LightGBM" if HAVE_LGBM else "HistGradientBoosting",
+            "class_weighting": "none — imbalance handled at decision threshold",
+            "n_folds": len(sites),
+            "conditions": CONDITIONS,
+            "decision_threshold": tau,
+            "cost_ratio": args.cost_ratio,
+            "n_features": {c: len(f) for c, f in feats_by_cond.items()},
+            "mean_recall": {"monitored": float(mon),
+                            "unmonitored": float(unm),
+                            "weather_only": float(wth)},
+            "reliability_penalty_no_sensor": float((mon - unm) / mon),
+            "spatial_feature_contribution": float((unm - wth) / unm),
+            "optimal_thresholds": {
+                c: float(b["threshold"]) for c, b in best_by_cond.items()},
+            "threshold_selection_caveat": (
+                "optimum selected in-fold; mildly optimistic"),
+        }, f, indent=2)
+
+    print(f"Saved to {RESULTS_DIR}/")
 
 
 if __name__ == "__main__":
