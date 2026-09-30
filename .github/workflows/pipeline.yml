@@ -1,42 +1,113 @@
-name: AirEquity scheduled pipeline
+name: Daily forecast
+
+# Rebuilds the training data, runs the data quality tests, fetches recent
+# observations and forecast weather, produces the 24-hour forecast, and
+# commits the three small forecast files so the live dashboard updates.
+#
+# Cron times are UTC. 21:00 UTC is 7am in Sydney (8am during daylight saving).
 
 on:
-  workflow_dispatch:
+  schedule:
+    - cron: "0 21 * * *"
+  workflow_dispatch: # "Run workflow" button, for demonstrations
+
+permissions:
+  contents: write # needed to commit the forecast files back
+
+concurrency:
+  group: daily-forecast
+  cancel-in-progress: false
 
 jobs:
-  run-pipeline:
+  forecast:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+    timeout-minutes: 40
 
-      - uses: actions/setup-python@v5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"
+          cache: pip
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          pip install -r requirements.txt
+          # The validated model is scikit-learn's HistGradientBoosting.
+          # LightGBM installs cleanly on Linux runners and the scripts would
+          # prefer it, producing forecasts from a different model than the
+          # one reported. Remove it so the runner matches the validation.
+          pip uninstall -y lightgbm || true
 
-      - name: Ingest observations
-        run: python -m src.ingest.fetch_observations
+      # ---- 1. Rebuild the 2023-2024 training data --------------------------
+      - name: Restore historical observations
+        run: |
+          mkdir -p data/processed data/raw
+          curl -sSL -o obs.zip \
+            https://github.com/ahriyad1/airequity-nsw/releases/download/v0.1-data/observations.zip
+          unzip -q obs.zip -d data/processed
+          rm obs.zip
+          # Keep only the validated training years
+          find data/processed/observations -maxdepth 1 -type d -name 'year=*' \
+            ! -name 'year=2023' ! -name 'year=2024' -exec rm -rf {} +
 
-      - name: Ingest weather forecasts
-        run: python -m src.ingest.fetch_weather
+      - name: Fetch station registry
+        run: python src/ingest/fetch_observations.py --list-sites
 
-      - name: Build features
-        run: python -m src.features.build
+      - name: Build temporal features
+        run: python src/features/build_features.py
 
-      - name: Generate forecasts
-        run: python -m src.models.predict
+      - name: Build spatial features
+        run: python src/features/spatial_features.py
 
-      - name: Log forecast error (model monitoring)
-        run: python -m src.models.log_error
+      # ---- 2. Gate on data quality -----------------------------------------
+      - name: Run data quality tests
+        run: python -m pytest tests/ -v
 
-      - name: Upload run artefacts
+      # ---- 3. Recent inputs --------------------------------------------------
+      # Training features are already built, so the observations store can now
+      # be replaced with just the recent window the forecast needs.
+      - name: Fetch recent observations
+        run: |
+          START=$(date -u -d '11 days ago' +%F)
+          END=$(date -u -d '1 day ago' +%F)
+          python src/ingest/fetch_observations.py --start "$START" --end "$END" \
+            --parameters PM2.5 TEMP HUMID WSP WDR
+
+      - name: Rebuild observations store
+        run: python src/storage/write_parquet.py
+
+      - name: Fetch forecast weather
+        run: python src/ingest/fetch_weather_openMeteo.py
+
+      # ---- 4. Forecast and publish ---------------------------------------------
+      - name: Produce forecast
+        run: python src/models/predict_today.py
+
+      - name: Commit forecast files
+        run: |
+          git config user.name  "airequity-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f data/processed/latest_forecast.parquet \
+                     data/processed/latest_forecast_meta.json \
+                     data/processed/latest_observations.parquet
+          if git diff --cached --quiet; then
+            echo "Forecast unchanged, nothing to commit."
+            exit 0
+          fi
+          git commit -m "Automated forecast $(date -u +%Y-%m-%dT%H:%MZ)"
+          git pull --rebase
+          git push
+
+      - name: Keep run outputs
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: pipeline-run-${{ github.run_number }}
+          name: forecast-${{ github.run_number }}
           path: |
-            logs/
-            data/processed/forecasts_latest.parquet
+            data/processed/latest_forecast.parquet
+            data/processed/latest_forecast_meta.json
           retention-days: 14
