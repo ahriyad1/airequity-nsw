@@ -1,0 +1,23 @@
+{
+  "issued_at": "2026-09-30T19:00:00",
+  "timezone": "Australia/Sydney",
+  "observations_up_to": "2026-09-28T23:00:00",
+  "observation_age_hours": 44.0,
+  "history_hours": 239.0,
+  "horizon_hours": 24,
+  "pm25_threshold_ug_m3": 25.0,
+  "threshold_monitored": 0.065,
+  "threshold_unmonitored": 0.09,
+  "model": "HistGradientBoosting",
+  "n_features_monitored": 56,
+  "n_features_unmonitored": 32,
+  "n_stations": 18,
+  "hours_alert_monitored": 0,
+  "hours_alert_unmonitored": 0,
+  "precision_penalty_unmonitored": 0.143,
+  "precision_penalty_ci": [
+    0.05,
+    0.238
+  ],
+  "generated": "2026-09-30T19:57:12"
+}

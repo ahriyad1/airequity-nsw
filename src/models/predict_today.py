@@ -281,6 +281,10 @@ def main():
     out["threshold_unmonitored"] = args.threshold_unmonitored
     out["pm25_threshold"] = args.pm25_threshold
 
+    recent = wide[["site_id", "site_name", "region", "timestamp", "PM2.5"]].copy()
+    recent["PM2.5"] = recent["PM2.5"].clip(lower=0)
+    recent.to_parquet(Path("data/processed/latest_observations.parquet"), index=False)
+    
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = OUT_PATH.with_suffix(".parquet.tmp")
     out.to_parquet(tmp, index=False)

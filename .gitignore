@@ -25,3 +25,8 @@ venv/
 Thumbs.db
 .vscode/
 .idea/
+
+# Small forecast artefacts read by the live dashboard
+!data/processed/latest_forecast.parquet
+!data/processed/latest_forecast_meta.json
+!data/processed/latest_observations.parquet
