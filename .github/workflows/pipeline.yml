@@ -10,6 +10,9 @@ on:
   schedule:
     - cron: "0 21 * * *"
   workflow_dispatch: # "Run workflow" button, for demonstrations
+  push:
+    branches: [main]
+    paths: [".github/workflows/pipeline.yml"]
 
 permissions:
   contents: write # needed to commit the forecast files back
