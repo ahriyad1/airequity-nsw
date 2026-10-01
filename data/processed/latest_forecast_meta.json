@@ -1,8 +1,8 @@
 {
-  "issued_at": "2026-09-30T19:00:00",
+  "issued_at": "2026-10-01T22:00:00",
   "timezone": "Australia/Sydney",
-  "observations_up_to": "2026-09-28T23:00:00",
-  "observation_age_hours": 44.0,
+  "observations_up_to": "2026-09-29T23:00:00",
+  "observation_age_hours": 47.0,
   "history_hours": 239.0,
   "horizon_hours": 24,
   "pm25_threshold_ug_m3": 25.0,
@@ -19,5 +19,5 @@
     0.05,
     0.238
   ],
-  "generated": "2026-09-30T19:57:12"
+  "generated": "2026-10-01T12:16:42"
 }
