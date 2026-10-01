@@ -1,4 +1,0 @@
-region,stations,population,area_km2,stations_per_100k,stations_per_1000km2,residents_per_station,pop_weighted_mean_km,pct_pop_beyond_5km,pct_pop_beyond_10km,pct_pop_beyond_20km
-Sydney East,7,2739175,1068.1,0.256,6.554,391310,5.99,49.8,15.9,1.8
-Sydney North-west,6,1315503,4469.6,0.456,1.342,219250,6.01,45.2,6.8,3.4
-Sydney South-west,5,829690,1767.4,0.603,2.829,165938,6.47,60.1,10.9,0.7
