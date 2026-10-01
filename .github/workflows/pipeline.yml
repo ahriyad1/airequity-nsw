@@ -12,7 +12,7 @@ on:
   workflow_dispatch: # "Run workflow" button, for demonstrations
   push:
     branches: [main]
-    paths: [".github/workflows/pipeline.yml"]
+    paths: [".github/workflows/pipeline.yml", "src/**", "tests/**", "requirements.txt"]
 
 permissions:
   contents: write # needed to commit the forecast files back

@@ -161,6 +161,10 @@ def main():
 
     print("Loading observations...")
     df = load_hourly()
+    # Train only on the validated 2023-2024 window. The observations store
+    # may also hold recent weeks fetched for forecasting, which must not
+    # leak into the training table.
+    df = df[(df["timestamp"] >= "2023-01-01") & (df["timestamp"] < "2025-01-01")]
     print(f"  {len(df):,} station-hours, {df['site_id'].nunique()} stations")
 
     print("Regularising hourly index...")
@@ -169,6 +173,10 @@ def main():
 
     print(f"Interpolating gaps up to {MAX_GAP_HOURS}h...")
     df = handle_gaps(df)
+    # Optical instruments report small negatives in clean air (7.6% of
+    # readings, floor -10). Clip to zero rather than drop, so the
+    # distribution is not biased upward for a threshold-crossing target.
+    df["PM2.5"] = df["PM2.5"].clip(lower=0)
     imputed = int(df["imputed"].sum())
     print(f"  {imputed:,} values imputed "
           f"({imputed / len(df):.1%} of rows)")
@@ -192,6 +200,10 @@ def main():
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     df["year"] = df["timestamp"].dt.year
+    import shutil
+    if OUT_DIR.exists():
+        shutil.rmtree(OUT_DIR)
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
     df.to_parquet(OUT_DIR, partition_cols=["year"], index=False)
 
     pos = int(df["label"].sum())

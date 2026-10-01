@@ -280,6 +280,10 @@ def main():
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     merged["year"] = merged["timestamp"].dt.year
+    import shutil
+    if OUT_DIR.exists():
+        shutil.rmtree(OUT_DIR)
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
     merged.to_parquet(OUT_DIR, partition_cols=["year"], index=False)   # partitioned by year for efficient downstream reads
 
     print(f"\nWritten to {OUT_DIR}/")
