@@ -84,7 +84,7 @@ jobs:
         run: python src/storage/write_parquet.py
 
       - name: Fetch forecast weather
-        run: python src/ingest/fetch_weather_openMeteo.py
+        run: python src/ingest/fetch_weather_openMeteo.py --past-days 3
 
       # ---- 4. Forecast and publish ---------------------------------------------
       - name: Produce forecast

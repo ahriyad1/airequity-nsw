@@ -851,7 +851,7 @@ with tab_method:
         unsafe_allow_html=True)
 
     steps = [
-        ("Fetch", "Hourly readings from the NSW Air Quality API, weather forecasts from Open-Meteo."),
+        ("Fetch", "Hourly readings from the NSW Air Quality API, recent weather from Open-Meteo."),
         ("Describe neighbours", "What nearby stations read now, weighted by distance and wind."),
         ("Estimate chance", "Two models trained on 2023–2024: with and without the station's own sensor."),
         ("Decide", "Advisory when the chance passes the level with the lowest cost in testing."),
@@ -881,9 +881,10 @@ with tab_method:
             panel_head("Limitations")
             st.markdown(
                 '<ul class="limits">'
-                '<li>Neighbour readings and station history are held at their latest values. '
-                'Only the weather is a true forecast.</li>'
-                '<li>Tested on recorded weather. With forecast weather, accuracy will be lower.</li>'
+                '<li>Each forecast uses conditions 24 hours before the hour it predicts, '
+                'as in training.</li>'
+                '<li>Station readings arrive about 40 hours late, so neighbour and station '
+                'inputs are older than in testing. Accuracy in practice will be lower.</li>'
                 '<li>Station readings arrive a day or more late.</li>'
                 '<li>About two in three warnings are false alarms. A prototype, not an alert service.</li>'
                 '</ul>', unsafe_allow_html=True)

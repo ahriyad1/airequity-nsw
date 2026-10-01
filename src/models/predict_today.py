@@ -2,19 +2,6 @@
 Produce 24-hour threshold-crossing forecasts for every operational station,
 with and without each station's own sensor.
 
-WHAT THIS DOES
-    Fits two classifiers on the historical feature matrix — one using each
-    station's own sensor history (monitored) and one without it
-    (unmonitored) — then forecasts the next 24 hours for every station
-    under both. Writes a small table the dashboard reads.
-
-WHY TWO FORECASTS
-    These stations have sensors, so the monitored forecast is the better
-    one to act on. The unmonitored forecast is what the system would say at
-    the same location if the sensor did not exist. Showing both side by side
-    demonstrates the project's central finding directly: the penalty for
-    having no local sensor, measured in the leave-one-station-out study as a
-    14.3% loss of precision, visible for each station on the day.
 """
 
 import argparse
@@ -44,8 +31,10 @@ OBS_DIR = Path("data/processed/observations")
 FORECAST_WEATHER = Path("data/processed/weather_forecasts_latest.parquet")
 OUT_PATH = Path("data/processed/latest_forecast.parquet")
 META_PATH = Path("data/processed/latest_forecast_meta.json")
+RECENT_PATH = Path("data/processed/latest_observations.parquet")
 
 TIMEZONE = "Australia/Sydney"
+HORIZON_HOURS = 24          # fixed by the training label; not adjustable
 STALE_WARNING_HOURS = 72
 MIN_HISTORY_HOURS = 168
 
@@ -66,17 +55,14 @@ CALENDAR = ["hour", "dayofweek", "month", "is_weekend",
             "hour_sin", "hour_cos", "month_sin", "month_cos"]
 GEO = ["latitude", "longitude"]
 
-# Cost-optimal thresholds from the pooled threshold sweep
 DEFAULT_THRESHOLD_MONITORED = 0.065
 DEFAULT_THRESHOLD_UNMONITORED = 0.090
-
-# Measured penalty for no local sensor, from the bootstrap analysis
 PRECISION_PENALTY = 0.143
 PRECISION_CI = (0.050, 0.238)
 
 
 def feature_sets(df):
-    """Same split as the leave-one-station-out validation."""
+   #Same split as the leave-one-station-out validation
     spatial = [c for c in df.columns if c.startswith(SPATIAL_PREFIX)]
     own = [c for c in df.columns
            if c.startswith(OWN_SENSOR_PREFIXES) or c in OWN_SENSOR_EXACT]
@@ -89,7 +75,7 @@ def feature_sets(df):
 
 
 def make_model():
-    #Same configuration as the validated model.
+  #Same configuration as the validated model
     if HAVE_LGBM:
         return LGBMClassifier(
             n_estimators=300, learning_rate=0.05, num_leaves=31,
@@ -100,8 +86,8 @@ def make_model():
         min_samples_leaf=50, random_state=42)
 
 
-def load_forecast_weather():
-    #Load forecast weather and align it to the training column names
+def load_weather():
+    #pen-Meteo weather aligned to training column names, with derived fields
     if not FORECAST_WEATHER.exists():
         raise FileNotFoundError(
             f"{FORECAST_WEATHER} not found — run fetch_weather_openMeteo.py first.")
@@ -126,8 +112,8 @@ def load_forecast_weather():
     return wx
 
 
-def add_calendar(df):
-    ts = df["timestamp"]
+def add_calendar(df, ts_col):
+    ts = df[ts_col]
     df["hour"] = ts.dt.hour
     df["dayofweek"] = ts.dt.dayofweek
     df["month"] = ts.dt.month
@@ -140,18 +126,14 @@ def add_calendar(df):
 
 
 def recent_observations(operational_ids, lookback_hours):
-   #Recent hourly observations, pivoted to one column per parameter
     if not OBS_DIR.exists():
         raise FileNotFoundError(f"{OBS_DIR} not found — run write_parquet.py first.")
-
     obs = pd.read_parquet(OBS_DIR)
     obs = obs[(obs["frequency"] == "Hourly average")
               & obs["parameter"].isin(["PM2.5", "TEMP", "HUMID", "WSP", "WDR"])
               & obs["site_id"].isin(operational_ids)]
-
     latest_ts = obs["timestamp"].max()
     obs = obs[obs["timestamp"] > latest_ts - pd.Timedelta(hours=lookback_hours)]
-
     wide = obs.pivot_table(index=["site_id", "site_name", "region", "timestamp"],
                            columns="parameter", values="value",
                            aggfunc="first").reset_index()
@@ -160,17 +142,14 @@ def recent_observations(operational_ids, lookback_hours):
 
 
 def latest_spatial_state(wide):
-    #Spatial features from the latest network state, one row per station
     df = wide[["site_id", "timestamp", "PM2.5", "WDR"]].copy()
     df["PM2.5"] = df["PM2.5"].clip(lower=0)
     recent = df[df["timestamp"] > df["timestamp"].max() - pd.Timedelta(hours=48)]
-
     coords = load_coordinates()
     coords = coords[coords["site_id"].isin(recent["site_id"].unique())]
     with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
         sp = build_spatial(recent, haversine_matrix(coords),
                            bearing_matrix(coords), k=3, idw_power=2.0)
-
     cols = [c for c in sp.columns if c.startswith(SPATIAL_PREFIX)]
     return (sp.dropna(subset=["spatial_idw"])
               .sort_values("timestamp")
@@ -179,18 +158,15 @@ def latest_spatial_state(wide):
 
 
 def latest_own_state(wide, own_cols):
-    #Each station's own-sensor features at its latest observed hour
     df = regularise_index(wide.copy())
     df = handle_gaps(df)
+    df["PM2.5"] = df["PM2.5"].clip(lower=0)
     df = add_temporal_features(df)
-
     present = [c for c in own_cols if c in df.columns]
-    latest = (df.dropna(subset=["PM2.5"])
-                .sort_values("timestamp")
-                .groupby("site_id")
-                .tail(1)[["site_id", "timestamp"] + present]
-                .rename(columns={"timestamp": "own_obs_time"}))
-    return latest
+    return (df.dropna(subset=["PM2.5"])
+              .sort_values("timestamp")
+              .groupby("site_id")
+              .tail(1)[["site_id"] + present])
 
 
 def main():
@@ -199,43 +175,46 @@ def main():
                     default=DEFAULT_THRESHOLD_MONITORED)
     ap.add_argument("--threshold-unmonitored", type=float,
                     default=DEFAULT_THRESHOLD_UNMONITORED)
-    ap.add_argument("--horizon", type=int, default=24)
     ap.add_argument("--pm25-threshold", type=float, default=25.0)
-    ap.add_argument("--lookback-hours", type=int, default=240,
-                    help="Hours of recent observations used to build features "
-                         "(default 240; must exceed 168 for the longest lag)")
+    ap.add_argument("--lookback-hours", type=int, default=240)
     args = ap.parse_args()
 
     now = pd.Timestamp.now(tz=TIMEZONE).tz_localize(None).floor("h")
-    print(f"Issue time: {now:%Y-%m-%d %H:%M} ({TIMEZONE})\n")
+    feat_start = now - pd.Timedelta(hours=HORIZON_HOURS)
+    print(f"Issue time   : {now:%Y-%m-%d %H:%M} ({TIMEZONE})")
+    print(f"Target hours : {now + pd.Timedelta(hours=1):%d %b %H:%M} to "
+          f"{now + pd.Timedelta(hours=HORIZON_HOURS):%d %b %H:%M}")
+    print(f"Feature hours: {feat_start + pd.Timedelta(hours=1):%d %b %H:%M} to "
+          f"{now:%d %b %H:%M}  (target minus {HORIZON_HOURS}h, as in training)\n")
 
-    # ---- training ------------------------------------------------------
+    # ---- training ------
     print("Loading historical features...")
     hist = pd.read_parquet(FEATURES_DIR).dropna(subset=["label"])
     hist["label"] = hist["label"].astype(int)
     mon_feats, unmon_feats, own_cols = feature_sets(hist)
     operational = set(hist["site_id"].unique())
     print(f"  {len(hist):,} rows, {len(operational)} stations")
-    print(f"  monitored: {len(mon_feats)} features, "
-          f"unmonitored: {len(unmon_feats)} features")
 
     print("Fitting models...")
     y = hist["label"].values
     model_mon = make_model().fit(hist[mon_feats], y)
     model_unmon = make_model().fit(hist[unmon_feats], y)
-    print(f"  both fitted "
-          f"({'LightGBM' if HAVE_LGBM else 'HistGradientBoosting'})")
+    print(f"  both fitted ({'LightGBM' if HAVE_LGBM else 'HistGradientBoosting'})")
 
-    # ---- inputs ----
-    print("Loading forecast weather...")
-    wx = load_forecast_weather()
-    horizon_end = now + pd.Timedelta(hours=args.horizon)
-    wx = wx[(wx["timestamp"] > now) & (wx["timestamp"] <= horizon_end)
-            & wx["site_id"].isin(operational)]
-    print(f"  {len(wx):,} station-hours in the next {args.horizon}h")
+    # ---- inputs at the feature hours ---------------
+    print("Loading weather for the feature hours...")
+    wx = load_weather()
+    wx = wx[(wx["timestamp"] > feat_start) & (wx["timestamp"] <= now)
+            & wx["site_id"].isin(operational)].copy()
+    print(f"  {len(wx):,} station-hours")
     if wx.empty:
-        print("\nNo forecast hours in the window. Re-run fetch_weather_openMeteo.py.")
+        print("\nNo weather covering the past 24 hours. Re-run "
+              "fetch_weather_openMeteo.py --past-days 3.")
         return
+    lag_cover = wx["temp_lag_24h"].notna().mean()
+    if lag_cover < 0.9:
+        print(f"  WARNING: 24-hour weather lag available for only {lag_cover:.0%} of "
+              f"rows. Re-run the weather fetch with --past-days 3.")
 
     print("Loading recent observations...")
     wide, obs_time = recent_observations(operational, args.lookback_hours)
@@ -246,33 +225,31 @@ def main():
     if age_h > STALE_WARNING_HOURS:
         print(f"  WARNING: observations more than {STALE_WARNING_HOURS}h old.")
     if history_h < MIN_HISTORY_HOURS:
-        print(f"  WARNING: under {MIN_HISTORY_HOURS}h of history — long lags "
-              f"will be missing and the monitored forecast is degraded. Fetch "
-              f"more observations.")
+        print(f"  WARNING: under {MIN_HISTORY_HOURS}h of history; the monitored "
+              f"forecast is degraded.")
 
     print("Building spatial and own-sensor features...")
     spatial = latest_spatial_state(wide)
     own = latest_own_state(wide, own_cols)
-    print(f"  spatial: {spatial['site_id'].nunique()} stations, "
-          f"own-sensor: {own['site_id'].nunique()} stations")
 
-    # ---- predict -------------------------------------------------------
-    X = wx.merge(spatial, on="site_id", how="left")
-    X = X.merge(own, on="site_id", how="left")
-    X = add_calendar(X)
+    X = wx.rename(columns={"timestamp": "feature_time"})
+    X = X.merge(spatial, on="site_id", how="left").merge(own, on="site_id", how="left")
+    X = add_calendar(X, "feature_time")
     for c in set(mon_feats) - set(X.columns):
         X[c] = np.nan
 
+    # ---- predict --------
     print("Predicting...")
     X["prob_monitored"] = model_mon.predict_proba(X[mon_feats])[:, 1]
     X["prob_unmonitored"] = model_unmon.predict_proba(X[unmon_feats])[:, 1]
-    X["alert_monitored"] = (X["prob_monitored"]
-                            >= args.threshold_monitored).astype(int)
-    X["alert_unmonitored"] = (X["prob_unmonitored"]
-                              >= args.threshold_unmonitored).astype(int)
+    X["alert_monitored"] = (X["prob_monitored"] >= args.threshold_monitored).astype(int)
+    X["alert_unmonitored"] = (X["prob_unmonitored"] >= args.threshold_unmonitored).astype(int)
+
+    # Each prediction is for the hour 24 hours after its features
+    X["timestamp"] = X["feature_time"] + pd.Timedelta(hours=HORIZON_HOURS)
 
     out = X[["site_id", "site_name", "region", "latitude", "longitude",
-             "timestamp", "prob_monitored", "prob_unmonitored",
+             "timestamp", "feature_time", "prob_monitored", "prob_unmonitored",
              "alert_monitored", "alert_unmonitored",
              "TEMP", "HUMID", "WSP", "WDR"]].copy()
     out["issued_at"] = now
@@ -281,14 +258,14 @@ def main():
     out["threshold_unmonitored"] = args.threshold_unmonitored
     out["pm25_threshold"] = args.pm25_threshold
 
-    recent = wide[["site_id", "site_name", "region", "timestamp", "PM2.5"]].copy()
-    recent["PM2.5"] = recent["PM2.5"].clip(lower=0)
-    recent.to_parquet(Path("data/processed/latest_observations.parquet"), index=False)
-    
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = OUT_PATH.with_suffix(".parquet.tmp")
     out.to_parquet(tmp, index=False)
     tmp.replace(OUT_PATH)
+
+    recent = wide[["site_id", "site_name", "region", "timestamp", "PM2.5"]].copy()
+    recent["PM2.5"] = recent["PM2.5"].clip(lower=0)
+    recent.to_parquet(RECENT_PATH, index=False)
 
     summary = (out.groupby(["site_id", "site_name", "region"])
                   .agg(peak_monitored=("prob_monitored", "max"),
@@ -302,10 +279,15 @@ def main():
         json.dump({
             "issued_at": now.isoformat(),
             "timezone": TIMEZONE,
+            "target_window": [out["timestamp"].min().isoformat(),
+                              out["timestamp"].max().isoformat()],
+            "feature_window": [out["feature_time"].min().isoformat(),
+                               out["feature_time"].max().isoformat()],
+            "horizon_hours": HORIZON_HOURS,
             "observations_up_to": obs_time.isoformat(),
             "observation_age_hours": round(age_h, 1),
             "history_hours": round(history_h, 1),
-            "horizon_hours": args.horizon,
+            "weather_lag_coverage": round(float(lag_cover), 3),
             "pm25_threshold_ug_m3": args.pm25_threshold,
             "threshold_monitored": args.threshold_monitored,
             "threshold_unmonitored": args.threshold_unmonitored,
@@ -321,10 +303,11 @@ def main():
         }, f, indent=2)
 
     print(f"\nWritten to {OUT_PATH}")
-    print(f"  {len(out):,} station-hours, {out['site_id'].nunique()} stations")
+    print(f"  {len(out):,} station-hours, {out['site_id'].nunique()} stations, "
+          f"targets {out['timestamp'].min():%d %b %H:%M} to "
+          f"{out['timestamp'].max():%d %b %H:%M}")
     print(f"  hours on alert — with sensor: {int(out['alert_monitored'].sum())}, "
           f"without sensor: {int(out['alert_unmonitored'].sum())}")
-
     print("\nPeak probability by station (with sensor / without sensor)")
     print(summary.head(10)[["site_name", "region", "peak_monitored",
                             "peak_unmonitored", "hours_alert_monitored",
