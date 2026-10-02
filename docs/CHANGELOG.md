@@ -217,6 +217,27 @@ deployed dashboard could not see any forecast.
 
 ---
 
+### Dashboard reports both validations
+
+**Previous state.** The Method tab showed the Assessment 2 leave-one-station-out
+results as "How well it works", and the Forecast tab presented the 14.3%
+precision penalty as an established figure.
+
+**Current state.** The Method tab shows the original and the stricter test side
+by side, with one sentence explaining why they differ. The sensor figures on
+the Forecast tab are labelled as coming from the original test. The
+limitations list leads with the finding that the model does not yet beat
+persistence on unseen days, a duplicated line was removed, and the claim that
+two in three warnings are false alarms was replaced.
+
+**Why.** Once the stricter test was run, presenting the original figures
+without qualification would have overstated the model's accuracy.
+
+**Evidence.** Commit "Delay analysis and leakage check; dashboard shows
+original and stricter validation"
+
+---
+
 ## Analysis
 
 ### Per-capita coverage and SEIFA analysis
@@ -244,7 +265,92 @@ Each area is assigned to its nearest operational station.
 
 ---
 
+## Validation
+
+### Cost of reporting delay
+
+**Previous state.** The model was validated with station readings available
+the moment they were taken. In practice they reach the API about 40 hours
+late, so the live system's inputs are roughly 16 to 40 hours stale.
+
+**Current state.** `src/analysis/data_delay.py` trains on 2023 and tests on
+2024, replacing the station-derived inputs with their values from 12 to 72
+hours earlier while keeping weather and calendar at the correct hour. The same
+102,934 test rows are scored at every delay, with a paired bootstrap over
+stations.
+
+**Findings.**
+
+- With a station's own sensor, every delay significantly reduces skill: recall
+  falls from 0.142 with no delay to between 0.012 and 0.058.
+- Without the station's own sensor, skill changes little until 48 to 72 hours.
+- At a 24-hour delay the forecast without the sensor scores higher than the one
+  with it (recall 0.076 against 0.058). Once a station's readings are a day old,
+  they add little.
+- Delays of 12 and 36 hours do more harm than 24 and 48. Readings from the
+  opposite time of day misrepresent the daily pollution cycle.
+- Skill with no delay was far below the Assessment 2 validation, which prompted
+  the leakage check below.
+
+**Evidence.** `src/analysis/data_delay.py`; `results/data_delay.csv`,
+`results/data_delay_ci.csv`
+
+---
+
+### Spatiotemporal leakage check
+
+**Previous state.** The Assessment 2 validation held out one station at a time
+but trained on the other 17 stations over the same two years it tested on.
+
+**Current state.** `src/analysis/leakage_check.py` tests each station's 2024
+data and trains on the other stations under two setups of equal size: the same
+period (2024) and an earlier period (2023). Test rows and training size are
+matched, so any difference comes from sharing days.
+
+**Findings.** Each station's 2024 data, 1,128 exceedances:
+
+| Setup                              | Recall | Precision | Best cost |
+| ---------------------------------- | ------ | --------- | --------- |
+| With own sensor, same period       | 0.133  | 0.195     | 0.072     |
+| With own sensor, earlier period    | 0.027  | 0.047     | 0.081     |
+| Without own sensor, earlier period | 0.029  | 0.031     | 0.081     |
+| Persistence                        | 0.100  | 0.103     | 0.080     |
+| Predict nothing                    |        |           | 0.081     |
+
+Every drop from the same period to the earlier period is significant. With
+the station's own sensor, recall falls by 0.101 (95% CI 0.052 to 0.156) and
+precision by 0.170 (0.104 to 0.231).
+
+**Why it happens.** Smoke events and inversions affect the whole basin at
+once. When training shares days with testing, the model can learn each day's
+outcome from the neighbouring stations, which a real forecast never has.
+Inner-city stations show it most clearly: Alexandria, Rozelle, Earlwood and
+Cook and Phillip each fall from between 0.19 and 0.35 recall to zero.
+
+**Evidence.** `src/analysis/leakage_check.py`; `results/leakage_check_*.csv`
+
+---
+
 ## Corrections to Assessment 2
+
+### Validation results were optimistic
+
+**A2 stated.** The model reduces cost-weighted loss by 21 to 28% against
+predicting nothing, and losing a station's own sensor costs 14.3% in precision
+(95% CI 5.0% to 23.8%) with no measurable change in recall.
+
+**Corrected.** Those figures came from a validation in which training shared
+days with testing. On days the model has not seen, it catches fewer
+exceedances than persistence and costs about the same as predicting nothing.
+The sensor comparison was measured under the same conditions and needs
+re-measuring.
+
+**Planned for Assessment 4.** Train on more years, since PM2.5 is available
+from 2016; validate with both stations and time held out; re-measure the
+sensor gap under that validation; and test whether a daily target, any
+exceedance tomorrow, is learnable where the hourly one is not.
+
+---
 
 ### Coverage premise not supported per capita
 
@@ -269,17 +375,6 @@ forecasting would use forecast weather, lowering accuracy (§25.2).
 future weather, so forecast weather is not the gap. The gap is reporting
 delay: station readings arrive about 40 hours late, so in practice the
 neighbour and station inputs are older than they were in testing.
-
----
-
-## In progress
-
-### Cost of reporting delay
-
-`src/analysis/data_delay.py` is written and tested on synthetic data. It
-trains on 2023, tests on 2024, and replaces the station-derived inputs with
-their values from 12 to 72 hours earlier to measure the accuracy lost. To be
-run and reported before Assessment 4.
 
 ---
 
