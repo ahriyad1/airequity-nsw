@@ -577,17 +577,18 @@ with tab_fc:
         # ---- sensor comparison ---------------------------------------------
         with st.container(border=True):
             panel_head("What a missing sensor changes",
-                       "Tested by hiding each station and forecasting it from its neighbours.")
+                       "From our original validation, which trained on neighbouring stations over the "
+                       "same days it tested. Being re-measured with a stricter test; see Method.")
             f_col, c_col = st.columns([1, 1.8], gap="large")
             with f_col:
                 st.markdown(
                     f'<div class="figure"><div class="figure-value" style="color:{ORANGE}">'
                     f'−{pct(PRECISION_PENALTY)}</div>'
-                    f'<div class="figure-label">Precision without a sensor</div>'
+                    f'<div class="figure-label">Precision without a sensor, original test</div>'
                     f'<div class="figure-note">95% CI {pct(PRECISION_CI[0])} to '
                     f'{pct(PRECISION_CI[1])}. More false alarms.</div></div>'
                     f'<div class="figure"><div class="figure-value" style="color:{GREEN}">≈ 0</div>'
-                    f'<div class="figure-label">Change in events caught</div>'
+                    f'<div class="figure-label">Change in events caught, original test</div>'
                     f'<div class="figure-note">Recall 38% with a sensor, 37% without.</div></div>',
                     unsafe_allow_html=True)
             with c_col:
@@ -846,8 +847,8 @@ with tab_method:
     st.markdown(
         '<div class="hero"><span class="pill neutral">How it works</span>'
         '<div class="hero-title">From readings to an advisory</div>'
-        '<div class="hero-sub">Forecasts for 18 Sydney stations, tested by hiding each '
-        'station and predicting it from the others.</div></div>',
+        '<div class="hero-sub">Forecasts for 18 Sydney stations, tested two ways. '
+        'The stricter test, on days the model has never seen, is the one to trust.</div></div>',
         unsafe_allow_html=True)
 
     steps = [
@@ -867,26 +868,40 @@ with tab_method:
     a, b = st.columns([1.35, 1], gap="medium")
     with a:
         with st.container(border=True):
-            panel_head("How well it works", "Averages across 18 stations, each hidden in turn.")
+            panel_head("How well it works",
+                       "Averages across 18 stations, each held out in turn. Original test: trained "
+                       "on the other stations over the same days. Stricter test: trained on the "
+                       "other stations in 2023, tested on 2024.")
             st.markdown(
-                '<table class="results"><tr><th>Forecast</th><th class="num">Caught</th>'
-                '<th class="num">Right when warning</th></tr>'
-                '<tr><td>With own sensor</td><td class="num">38%</td><td class="num">36%</td></tr>'
-                '<tr><td>Without own sensor</td><td class="num">37%</td><td class="num">31%</td></tr>'
-                '<tr><td>Weather only</td><td class="num">31%</td><td class="num">24%</td></tr>'
-                '<tr><td>"Tomorrow like today"</td><td class="num">10%</td><td class="num">10%</td></tr>'
-                '</table>', unsafe_allow_html=True)
+                '<table class="results">'
+                '<tr><th></th><th colspan="2" style="text-align:center">Original test</th>'
+                '<th colspan="2" style="text-align:center">Stricter test</th></tr>'
+                '<tr><th>Forecast</th><th class="num">Caught</th><th class="num">Right</th>'
+                '<th class="num">Caught</th><th class="num">Right</th></tr>'
+                '<tr><td>With own sensor</td><td class="num">38%</td><td class="num">36%</td>'
+                '<td class="num">3%</td><td class="num">5%</td></tr>'
+                '<tr><td>Without own sensor</td><td class="num">37%</td><td class="num">31%</td>'
+                '<td class="num">3%</td><td class="num">3%</td></tr>'
+                '<tr><td>"Tomorrow like today"</td><td class="num">10%</td><td class="num">10%</td>'
+                '<td class="num">10%</td><td class="num">10%</td></tr>'
+                '</table>'
+                '<div class="panel-sub" style="margin-top:.8rem">Smoke events hit the whole basin '
+                'at once, so the original test could learn each day\'s outcome from the neighbouring '
+                'stations, which a real forecast cannot. On unseen days the model does not yet beat '
+                '"tomorrow like today". Improving it is the main work before the final report.</div>',
+                unsafe_allow_html=True)
     with b:
         with st.container(border=True):
             panel_head("Limitations")
             st.markdown(
                 '<ul class="limits">'
+                '<li>On days it has not seen, the model does not yet beat a forecast of '
+                '"tomorrow like today". The original validation figures were optimistic.</li>'
                 '<li>Each forecast uses conditions 24 hours before the hour it predicts, '
                 'as in training.</li>'
                 '<li>Station readings arrive about 40 hours late, so neighbour and station '
-                'inputs are older than in testing. Accuracy in practice will be lower.</li>'
-                '<li>Station readings arrive a day or more late.</li>'
-                '<li>About two in three warnings are false alarms. A prototype, not an alert service.</li>'
+                'inputs are older than in testing, which lowers accuracy further.</li>'
+                '<li>Most warnings would be false alarms. A prototype, not an alert service.</li>'
                 '</ul>', unsafe_allow_html=True)
 
 st.markdown(

@@ -1,0 +1,8 @@
+{
+  "generated": "2026-10-02T14:50:04",
+  "design": "hold out each station; test its 2024 data; train other stations in 2024 (same period) or 2023 (earlier period)",
+  "model": "HistGradientBoosting",
+  "decision_threshold": 0.09090909090909091,
+  "predict_nothing_cost": 0.08108166389925173,
+  "n_bootstrap": 2000
+}
