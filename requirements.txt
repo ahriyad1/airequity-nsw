@@ -11,8 +11,8 @@ statsmodels>=0.14
 lightgbm>=4.3
 
 # Dashboard
-streamlit>=1.35
-plotly>=5.20
+streamlit>=1.40
+plotly>=5.24
 folium>=0.16
 streamlit-folium>=0.20
 
