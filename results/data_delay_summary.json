@@ -1,0 +1,24 @@
+{
+  "generated": "2026-10-02T13:20:00",
+  "design": "train 2023, test 2024; station-derived inputs delayed by L hours",
+  "model": "HistGradientBoosting",
+  "thresholds": {
+    "monitored": 0.065,
+    "unmonitored": 0.09
+  },
+  "lags_h": [
+    0,
+    12,
+    24,
+    36,
+    48,
+    72
+  ],
+  "test_rows": 102934,
+  "test_exceedances": 776,
+  "production_staleness_h": [
+    16,
+    40
+  ],
+  "n_bootstrap": 2000
+}
