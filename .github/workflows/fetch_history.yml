@@ -1,0 +1,153 @@
+name: Fetch historical data (one-off)
+
+# Fetches PM2.5 and weather observations for earlier years from the NSW Air
+# Quality API and publishes them as a GitHub release (v0.2-data), alongside
+# the existing 2023-2024 data from v0.1-data.
+
+on:
+  workflow_dispatch:
+    inputs:
+      first_year:
+        description: "First year to fetch"
+        default: "2016"
+        required: true
+      last_year:
+        description: "Last year to fetch (2025 gives a fresh test year)"
+        default: "2025"
+        required: true
+
+permissions:
+  contents: write # needed to create the data release
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      years: ${{ steps.years.outputs.years }}
+    steps:
+      - id: years
+        run: |
+          YEARS=$(python3 -c "import json; print(json.dumps([str(y) for y in range(${{ inputs.first_year }}, ${{ inputs.last_year }} + 1) if y not in (2023, 2024)]))")
+          echo "Years to fetch: $YEARS (2023 and 2024 come from v0.1-data)"
+          echo "years=$YEARS" >> "$GITHUB_OUTPUT"
+
+  fetch:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        year: ${{ fromJson(needs.plan.outputs.years) }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Fetch ${{ matrix.year }}
+        run: |
+          START="${{ matrix.year }}-01-01"
+          END="$(( ${{ matrix.year }} + 1 ))-01-01"
+          ARGS="--start $START --end $END --parameters PM2.5 TEMP HUMID WSP WDR"
+          # One retry if any chunk fails; duplicates are removed later.
+          python src/ingest/fetch_observations.py $ARGS \
+            || { echo "Retrying after failures..."; sleep 60; python src/ingest/fetch_observations.py $ARGS; }
+
+      - name: Convert to Parquet
+        run: |
+          python src/storage/write_parquet.py
+          # Keep only this year's partition
+          find data/processed/observations -maxdepth 1 -type d -name 'year=*' \
+            ! -name 'year=${{ matrix.year }}' -exec rm -rf {} +
+          python src/storage/write_parquet.py --stats
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: obs-${{ matrix.year }}
+          path: |
+            data/processed/observations
+            data/raw/sites.json
+          retention-days: 7
+
+  publish:
+    needs: fetch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install pandas pyarrow
+
+      - name: Restore 2023-2024 from v0.1-data
+        run: |
+          mkdir -p merged
+          curl -sSL -o obs.zip \
+            https://github.com/ahriyad1/airequity-nsw/releases/download/v0.1-data/observations.zip
+          unzip -q obs.zip -d merged
+          rm obs.zip
+          find merged/observations -maxdepth 1 -type d -name 'year=*' \
+            ! -name 'year=2023' ! -name 'year=2024' -exec rm -rf {} +
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: obs-*
+          path: fetched
+
+      - name: Merge years
+        run: |
+          for d in fetched/obs-*; do
+            cp -r "$d"/data/processed/observations/year=* merged/observations/
+          done
+          # Station registry from the newest fetch
+          cp "$(ls -d fetched/obs-* | tail -1)"/data/raw/sites.json merged/sites.json
+
+      - name: Summary
+        run: |
+          python - <<'EOF'
+          import pandas as pd
+          d = pd.read_parquet("merged/observations")
+          p = d[(d.parameter == "PM2.5") & (d.frequency == "Hourly average")].copy()
+          p["v"] = p["value"].clip(lower=0)
+          p["day"] = p["timestamp"].dt.floor("D")
+          g = p.groupby(["site_id", "day"])["v"].agg(["mean", "count"]).reset_index()
+          g = g[g["count"] >= 18]
+          g["year"] = g["day"].dt.year
+          s = g.groupby("year").agg(stations=("site_id", "nunique"),
+                                    station_days=("mean", "size"),
+                                    bad_days=("mean", lambda x: int((x > 25).sum())))
+          s["hourly_rows"] = p.groupby(p["timestamp"].dt.year).size()
+          print(s.to_string())
+          with open("summary.md", "w") as f:
+              f.write("Hourly PM2.5 and weather (TEMP, HUMID, WSP, WDR) for Sydney "
+                      "stations from the NSW Air Quality API.\n\n"
+                      "bad_days = station-days with a daily mean PM2.5 above "
+                      "25 ug/m3 (at least 18 valid hours).\n\n```\n"
+                      + s.to_string() + "\n```\n")
+          EOF
+          cat summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish v0.2-data release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd merged && zip -qr ../observations.zip observations && cd ..
+          ls -lh observations.zip
+          if gh release view v0.2-data >/dev/null 2>&1; then
+            gh release upload v0.2-data observations.zip merged/sites.json --clobber
+          else
+            gh release create v0.2-data observations.zip merged/sites.json \
+              --title "Historical observations ${{ inputs.first_year }}-${{ inputs.last_year }}" \
+              --notes-file summary.md
+          fi
