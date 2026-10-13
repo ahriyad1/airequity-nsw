@@ -199,13 +199,13 @@ Outputs are in `results/coverage_*.csv` and `results/coverage_equity_summary.jso
 
 ## Team
 
-| Member   | Component ownership                                          |
-| -------- | ------------------------------------------------------------ |
-| _[Name]_ | Acquisition: API clients, resilience, schema validation      |
-| _[Name]_ | Storage and processing: Parquet, DuckDB, feature engineering |
-| _[Name]_ | Analytics/ML: baselines, classifier, validation              |
-| _[Name]_ | Visualisation: Streamlit dashboard                           |
-| _[Name]_ | Automation and governance: GitHub Actions, tests, ethics     |
+| Member            | Main contributions                                                                          |
+| ----------------- | ------------------------------------------------------------------------------------------- |
+| Abdul Huq Riyad   | Architecture, modelling and validation, leakage check, daily forecast, project coordination |
+| Pronab Sarker     | Data ingestion (NSW Air Quality API), Parquet storage, Open-Meteo weather client            |
+| Jasia Binte Alam  | Spatial features, data quality tests, GitHub Actions automation                             |
+| Pujan Dey         | Streamlit dashboard: design, implementation and cloud deployment                            |
+| Obantika Roy Anti | Coverage and equity analysis, documentation                                                 |
 
 ---
 
