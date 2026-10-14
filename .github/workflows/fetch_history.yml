@@ -15,9 +15,14 @@ on:
         description: "Last year to fetch (2025 gives a fresh test year)"
         default: "2025"
         required: true
+      reuse_run:
+        description: "Run ID of an earlier fetch to reuse (skips fetching). Leave blank to fetch."
+        default: ""
+        required: false
 
 permissions:
   contents: write # needed to create the data release
+  actions: read # needed to reuse files from an earlier run
 
 jobs:
   plan:
@@ -33,6 +38,7 @@ jobs:
 
   fetch:
     needs: plan
+    if: inputs.reuse_run == ''
     runs-on: ubuntu-latest
     timeout-minutes: 120
     strategy:
@@ -78,6 +84,7 @@ jobs:
 
   publish:
     needs: fetch
+    if: ${{ !cancelled() && (needs.fetch.result == 'success' || needs.fetch.result == 'skipped') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -104,20 +111,38 @@ jobs:
         with:
           pattern: obs-*
           path: fetched
+          run-id: ${{ inputs.reuse_run || github.run_id }}
+          github-token: ${{ github.token }}
 
       - name: Merge years
         run: |
-          for d in fetched/obs-*; do
-            cp -r "$d"/data/processed/observations/year=* merged/observations/
+          # Artifact paths drop their shared "data/" prefix, so search for
+          # the year folders instead of assuming a layout.
+          found=0
+          for d in $(find fetched -type d -name 'year=*'); do
+            cp -r "$d" merged/observations/
+            found=$((found + 1))
           done
+          echo "Copied $found year folders:"
+          ls merged/observations
+          test "$found" -gt 0
           # Station registry from the newest fetch
-          cp "$(ls -d fetched/obs-* | tail -1)"/data/raw/sites.json merged/sites.json
+          cp "$(find fetched -name sites.json | sort | tail -1)" merged/sites.json
 
       - name: Summary
         run: |
           python - <<'EOF'
           import pandas as pd
-          d = pd.read_parquet("merged/observations")
+          from pathlib import Path
+          cols = ["site_id", "parameter", "frequency", "value", "timestamp"]
+          # Read one year at a time: older and newer files may store
+          # timestamps at different precisions.
+          parts = []
+          for y in sorted(Path("merged/observations").glob("year=*")):
+              part = pd.read_parquet(y, columns=cols)
+              part["timestamp"] = pd.to_datetime(part["timestamp"]).astype("datetime64[ns]")
+              parts.append(part)
+          d = pd.concat(parts, ignore_index=True)
           p = d[(d.parameter == "PM2.5") & (d.frequency == "Hourly average")].copy()
           p["v"] = p["value"].clip(lower=0)
           p["day"] = p["timestamp"].dt.floor("D")
