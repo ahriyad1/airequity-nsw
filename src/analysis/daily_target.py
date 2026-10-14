@@ -1,7 +1,7 @@
 """
 Can we forecast tomorrow's daily-average PM2.5 exceedance on unseen days?
 
-==Daily target under an honest validation
+Daily target under an honest validation
 
 WHY A DAILY TARGET
     The national PM2.5 standard (25 ug/m3) is a 24-hour average, but the A2
@@ -18,8 +18,13 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy.stats import binomtest
 from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import average_precision_score
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import FunctionTransformer, StandardScaler
 
 OBS_DIR = Path("data/processed/observations")
 RESULTS_DIR = Path("results")
@@ -34,21 +39,40 @@ EVENING = range(18, 24)   # hours used for the evening mean
 # ----- data ----
 
 def parse_years(s):
-    if "-" in s:
-        a, b = s.split("-")
-        return list(range(int(a), int(b) + 1))
-    return [int(y) for y in s.split(",")]
+    #'2016-2018,2021' -> [2016, 2017, 2018, 2021]
+    years = []
+    for part in s.split(","):
+        if "-" in part:
+            a, b = part.split("-")
+            years += range(int(a), int(b) + 1)
+        else:
+            years.append(int(part))
+    return sorted(set(years))
 
 
 def load_daily():
-    #ourly observations -> one row per station-day
-    obs = pd.read_parquet(OBS_DIR)
-    obs = obs[obs["frequency"] == "Hourly average"]
+    # Hourly observations -> one row per station-day.
+    # Read one year at a time, only the columns and rows needed: the full
+    # 2016-2025 store does not fit in memory with every column loaded.
+    cols = ["site_id", "site_name", "latitude", "longitude",
+            "parameter", "frequency", "timestamp", "value"]
+    keep = ["PM2.5", "TEMP", "HUMID", "WSP", "WDR"]
+    parts = []
+    for year_dir in sorted(OBS_DIR.glob("year=*")):
+        part = pd.read_parquet(year_dir, columns=cols,
+                               filters=[("frequency", "==", "Hourly average"),
+                                        ("parameter", "in", keep)])
+        part["timestamp"] = pd.to_datetime(part["timestamp"]).astype("datetime64[ns]")
+        parts.append(part.drop(columns="frequency"))
+    obs = pd.concat(parts, ignore_index=True)
     sites = (obs[["site_id", "site_name", "latitude", "longitude"]]
              .drop_duplicates("site_id").set_index("site_id"))
 
-    wide = obs.pivot_table(index=["site_id", "timestamp"], columns="parameter",
-                           values="value", aggfunc="first").reset_index()
+    wide = (obs.drop_duplicates(["site_id", "timestamp", "parameter"])
+               .set_index(["site_id", "timestamp", "parameter"])["value"]
+               .unstack("parameter").reset_index())
+    wide.columns.name = None
+    del obs, parts
     wide["PM2.5"] = wide["PM2.5"].clip(lower=0)
     wide["day"] = wide["timestamp"].dt.floor("D")
     wide["hr"] = wide["timestamp"].dt.hour
@@ -73,7 +97,7 @@ def load_daily():
 
 
 def complete_grid(daily):
-    """Every station gets every day between its first and last record."""
+   #Every station gets every day between its first and last record
     frames = []
     for sid, g in daily.groupby("site_id"):
         days = pd.date_range(g["day"].min(), g["day"].max(), freq="D")
@@ -156,14 +180,31 @@ def build_table(daily, sites, delay):
     own = own_cols + ["pm_mean_lag1", "pm_mean_lag2", "pm_mean_3d"]
     net = net_cols + ["net_mean_lag1", "net_idw_lag1"]
     cal = ["doy_sin", "doy_cos", "month", "dayofweek"]
-    fsets = {"with_sensor": own + net + w_cols + cal,
-             "without_sensor": net + w_cols + cal}
+    # Logistic model: pollution features only. The gradient-boosting model
+    # also sees weather and calendar, and learned from the training years
+    # that summer pollution usually clears by the next day; in the 2019-20
+    # smoke it did not, and the model missed most bad days (see AIR-24 notes).
+    pm_own = [c for c in own if c != "pm_std"]
+    fsets = {
+        "logistic": {"with_sensor": pm_own + net, "without_sensor": net},
+        "hgb": {"with_sensor": own + net + w_cols + cal,
+                "without_sensor": net + w_cols + cal},
+    }
     return t, fsets
 
 
 # ---- metrics ----
 
-def make_model():
+def log_clip(X):
+    return np.log1p(np.clip(X, 0, None))
+
+
+def make_model(kind):
+    if kind == "logistic":
+        # PM2.5 is heavily skewed, so features are log-transformed first.
+        return make_pipeline(SimpleImputer(strategy="median"),
+                             FunctionTransformer(log_clip), StandardScaler(),
+                             LogisticRegression(C=1.0, max_iter=2000))
     return HistGradientBoostingClassifier(
         max_iter=300, learning_rate=0.05, max_leaf_nodes=31,
         min_samples_leaf=20, l2_regularization=1.0, random_state=42)
@@ -198,9 +239,19 @@ def boot_diff(per_station, a, b, rng, n_boot):
     return float(diffs.mean()), float(lo), float(hi)
 
 
+def sign_test(per_station, a, b):
+    #Stations where a has lower cost than b, vs higher (ties dropped)
+    def cost(c):
+        return (COST_RATIO * c["missed"] + c["false_alarms"]) / c["n"]
+    d = [cost(per_station[k][a]) - cost(per_station[k][b]) for k in per_station]
+    better = sum(x < 0 for x in d); worse = sum(x > 0 for x in d)
+    p = binomtest(better, better + worse, 0.5).pvalue if better + worse else np.nan
+    return better, worse, float(p)
+
+
 # ---- main ----
 
-def run(table, fsets, train_years, test_years, rng, n_boot, delay):
+def run(table, fsets, train_years, test_years, rng, n_boot, delay, kind):
     sites = sorted(table.loc[table["year"].isin(test_years), "site_id"].unique())
     per_station, probs, rows = {}, {k: ([], []) for k in fsets}, []
 
@@ -213,7 +264,7 @@ def run(table, fsets, train_years, test_years, rng, n_boot, delay):
         res = {}
         alarms = {}
         for cond, cols in fsets.items():
-            p = make_model().fit(train[cols], train["y"]).predict_proba(test[cols])[:, 1]
+            p = make_model(kind).fit(train[cols], train["y"]).predict_proba(test[cols])[:, 1]
             probs[cond][0].append(y); probs[cond][1].append(p)
             alarms[cond] = p >= TAU
         alarms["persistence"] = (test["pm_mean"] > THRESHOLD).values
@@ -252,8 +303,11 @@ def run(table, fsets, train_years, test_years, rng, n_boot, delay):
     ci = []
     for a, b in comparisons:
         mean, lo, hi = boot_diff(per_station, a, b, rng, n_boot)
+        better, worse, p = sign_test(per_station, a, b)
         ci.append({"delay_days": delay, "comparison": f"{a} - {b}", "cost_diff": mean,
-                   "ci_low": lo, "ci_high": hi, "excludes_zero": bool(lo > 0 or hi < 0)})
+                   "ci_low": lo, "ci_high": hi, "excludes_zero": bool(lo > 0 or hi < 0),
+                   "stations_better": better, "stations_worse": worse,
+                   "sign_test_p": p})
     return folds, summary, pd.DataFrame(ci)
 
 
@@ -265,13 +319,18 @@ def main():
     ap.add_argument("--delays", nargs="+", type=int, default=[0])
     ap.add_argument("--n-boot", type=int, default=2000)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--model", choices=["logistic", "hgb"], default="logistic",
+                    help="logistic on pollution features (default) or the "
+                         "gradient-boosting model used for the hourly forecast")
+    ap.add_argument("--tag", default="",
+                    help="suffix for the output files, e.g. smoke_2019_20")
     args = ap.parse_args()
     train_years, test_years = parse_years(args.train_years), parse_years(args.test_years)
     if set(train_years) & set(test_years):
         ap.error("training and test years must not overlap")
     rng = np.random.default_rng(args.seed)
 
-    print("Loading observations...")
+    print(f"Model: {args.model}\nLoading observations...")
     daily, sites = load_daily()
     print(f"  {len(daily):,} station-days, {daily['site_id'].nunique()} stations, "
           f"{daily['day'].min().date()} to {daily['day'].max().date()}")
@@ -286,32 +345,37 @@ def main():
               f"{int(tr['y'].sum())} over 25 on {tr.loc[tr['y'] == 1, 'day'].nunique()} dates")
         print(f"  test  {test_years[0]}-{test_years[-1]}: {len(te):,} station-days, "
               f"{int(te['y'].sum())} over 25 on {te.loc[te['y'] == 1, 'day'].nunique()} dates")
-        folds, summ, ci = run(table, fsets, train_years, test_years, rng, args.n_boot, delay)
+        folds, summ, ci = run(table, fsets[args.model], train_years, test_years,
+                              rng, args.n_boot, delay, args.model)
         all_folds.append(folds); all_summ.append(summ); all_ci.append(ci)
 
         show = summ[summ["test_years"] == "all"]
         print("\n  " + show[["method", "events", "caught", "false_alarms", "recall",
                              "precision", "cost"]].round(4).to_string(index=False)
               .replace("\n", "\n  "))
-        print("\n  Cost difference, 95% CI over stations (negative = first is better):")
+        print("\n  Cost difference, 95% CI over stations (negative = first is better);")
+        print("  stations where first is better/worse, sign-test p:")
         for r in ci.itertuples():
             print(f"    {r.comparison:<45} {r.cost_diff:+.4f}  [{r.ci_low:+.4f}, {r.ci_high:+.4f}]"
-                  f"{'  *' if r.excludes_zero else ''}")
+                  f"{'  *' if r.excludes_zero else '   '}  {r.stations_better:>2}/{r.stations_worse:<2} p={r.sign_test_p:.3f}")
 
     RESULTS_DIR.mkdir(exist_ok=True)
-    pd.concat(all_folds).to_csv(RESULTS_DIR / "daily_target_folds.csv", index=False)
-    pd.concat(all_summ).to_csv(RESULTS_DIR / "daily_target_summary.csv", index=False)
-    pd.concat(all_ci).to_csv(RESULTS_DIR / "daily_target_ci.csv", index=False)
-    (RESULTS_DIR / "daily_target.json").write_text(json.dumps({
+    stem = "daily_target" + (f"_{args.tag}" if args.tag else "")
+    pd.concat(all_folds).to_csv(RESULTS_DIR / f"{stem}_folds.csv", index=False)
+    pd.concat(all_summ).to_csv(RESULTS_DIR / f"{stem}_summary.csv", index=False)
+    pd.concat(all_ci).to_csv(RESULTS_DIR / f"{stem}_ci.csv", index=False)
+    (RESULTS_DIR / f"{stem}.json").write_text(json.dumps({
         "generated": datetime.now().isoformat(timespec="seconds"),
         "train_years": train_years, "test_years": test_years, "delays": args.delays,
         "threshold": THRESHOLD, "min_valid_hours": MIN_HOURS,
         "cost_ratio": COST_RATIO, "decision_threshold": TAU,
         "validation": "hold out each station AND the test years; train on other "
                       "stations in the training years only",
+        "model": args.model,
+        "features": fsets[args.model],
         "n_bootstrap": args.n_boot,
     }, indent=2))
-    print(f"\nSaved to {RESULTS_DIR}/daily_target_*.csv and daily_target.json")
+    print(f"\nSaved to {RESULTS_DIR}/{stem}_*.csv and {stem}.json")
 
 
 if __name__ == "__main__":
