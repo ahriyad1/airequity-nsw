@@ -1,13 +1,7 @@
-"""AirEquity NSW — 24-hour PM2.5 advisory dashboard.
+"""AirEquity NSW — daily PM2.5 advisory dashboard.
 
 Run from the repository root:
     streamlit run src/dashboard/app.py
-
-Tabs
-    Forecast          the next 24 hours for every station
-    Station           one station: recent readings and its forecast
-    Network history   2023-2024 exposure patterns and the smoke event explorer
-    Method            how the forecast is made, and its limitations
 """
 
 from __future__ import annotations
@@ -32,8 +26,9 @@ THRESHOLD = 25.0
 OBS_PATH = Path("data/processed/observations")
 FEATURES_PATH = Path("data/processed/features")
 SITES_PATH = Path("data/raw/sites.json")
-FORECAST_PATH = Path("data/processed/latest_forecast.parquet")
-FORECAST_META_PATH = Path("data/processed/latest_forecast_meta.json")
+FORECAST_PATH = Path("data/processed/latest_daily_forecast.parquet")
+FORECAST_META_PATH = Path("data/processed/latest_daily_forecast_meta.json")
+RESULTS_DIR = Path("results")
 RECENT_OBS_PATH = Path("data/processed/latest_observations.parquet")
 
 DEFAULT_STATION_START = pd.Timestamp("2023-09-01")
@@ -47,9 +42,18 @@ DATA_RELEASE_URL = (
 )
 SUPPORTED_YEARS = {"year=2023", "year=2024"}
 
-# Leave-one-station-out validation results (Assessment 2)
-PRECISION_PENALTY = 0.143
-PRECISION_CI = (0.050, 0.238)
+# Validation results written by src/analysis/daily_target.py
+VALIDATION_FILES = {
+    ("2019-20 smoke", 0): "daily_target_logistic_smoke_2019_20_summary.csv",
+    ("2019-20 smoke", 2): "daily_target_logistic_smoke_2019_20_summary.csv",
+    ("2019-20 smoke", 1): "daily_target_logistic_delay1_smoke_2019_20_summary.csv",
+    ("2021-23", 0): "daily_target_logistic_2021_23_summary.csv",
+    ("2021-23", 2): "daily_target_logistic_2021_23_summary.csv",
+    ("2021-23", 1): "daily_target_logistic_delay1_2021_23_summary.csv",
+    ("2024-25", 0): "daily_target_logistic_2024_25_summary.csv",
+    ("2024-25", 2): "daily_target_logistic_2024_25_summary.csv",
+    ("2024-25", 1): "daily_target_logistic_delay1_2024_25_summary.csv",
+}
 
 # -----------------------------------------------------------------------------
 # Visual tokens
@@ -70,16 +74,17 @@ ORANGE = "#FB923C"
 DANGER = "#F43F5E"
 FONT = "Geist, -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
 
-# Chance of exceeding 25 ug/m3. Fixed scale, so a clean day stays green.
-PROB_MAX = 0.30
+# Chance of a daily average over 25 ug/m3. Fixed scale, so a clean day stays green;
+# the advisory level (9.1%) is where the colour turns amber.
+PROB_MAX = 0.60
 RISK_SCALE = [
     [0.000, "#15303A"],
-    [0.060, "#17564B"],
-    [0.130, "#1F9D72"],
-    [0.217, "#E7C94A"],   # ~6.5%, advisory level with own sensor
-    [0.300, "#F59E0B"],   # ~9%, advisory level without
-    [0.550, "#F4623A"],
-    [1.000, "#E11D48"],
+    [0.050, "#17564B"],
+    [0.110, "#1F9D72"],
+    [0.152, "#E7C94A"],   # 9.1%, advisory level
+    [0.330, "#F59E0B"],   # 20%
+    [0.600, "#F4623A"],   # 36%
+    [1.000, "#E11D48"],   # 60%+
 ]
 SERIES = ["#4F8CFF", "#FBBF24", "#34D399", "#A78BFA", "#F472B6",
           "#22D3EE", "#FB923C", "#E8ECF4"]
@@ -89,11 +94,11 @@ PLOT_CONFIG = {"displayModeBar": False, "displaylogo": False}
 def risk_colour(p: float) -> str:
     if p < 0.03:
         return GREEN
-    if p < 0.065:
+    if p < 0.091:
         return "#FACC15"
-    if p < 0.09:
+    if p < 0.20:
         return "#F59E0B"
-    if p < 0.165:
+    if p < 0.40:
         return "#F97316"
     return DANGER
 
@@ -318,11 +323,25 @@ def load_forecast():
     if not FORECAST_PATH.exists():
         return None, {}
     fc = pd.read_parquet(FORECAST_PATH)
-    fc["timestamp"] = pd.to_datetime(fc["timestamp"])
+    for c in ("target_day", "base_day", "issued_at"):
+        fc[c] = pd.to_datetime(fc[c])
     meta = {}
     if FORECAST_META_PATH.exists():
         meta = json.loads(FORECAST_META_PATH.read_text(encoding="utf-8"))
     return fc, meta
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_validation() -> pd.DataFrame:
+    frames = []
+    for (period, delay), fname in VALIDATION_FILES.items():
+        path = RESULTS_DIR / fname
+        if not path.exists():
+            continue
+        s = pd.read_csv(path)
+        s = s[(s["test_years"] == "all") & (s["delay_days"] == delay)]
+        frames.append(s.assign(period=period))
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -350,6 +369,11 @@ def hour_label(ts) -> str:
 def day_hour(ts) -> str:
     ts = pd.Timestamp(ts)
     return f"{ts.day} {ts.strftime('%b')}, {hour_label(ts)}"
+
+
+def day_label(d) -> str:
+    d = pd.Timestamp(d)
+    return f"{d.strftime('%a')} {d.day} {d.strftime('%b')}"
 
 
 def pct(p, digits=1) -> str:
@@ -428,12 +452,19 @@ regional = (feat.groupby("region", as_index=False)["label"].mean()
 regional["rate_pct"] = regional["rate"] * 100
 network_rate_pct = float(feat["label"].mean() * 100)
 
-has_fc = fc is not None and not fc.empty
+has_fc = fc is not None and not fc.empty and bool(meta)
 if has_fc:
     issued = pd.Timestamp(meta.get("issued_at", fc["issued_at"].iloc[0]))
-    obs_to = pd.Timestamp(meta.get("observations_up_to", fc["observations_up_to"].iloc[0]))
-    thr_mon = float(fc["threshold_monitored"].iloc[0])
-    thr_unmon = float(fc["threshold_unmonitored"].iloc[0])
+    obs_to = pd.Timestamp(meta["observations_up_to"])
+    base_day = pd.Timestamp(meta["base_day"])
+    thr = float(meta.get("decision_threshold", 1 / 11))
+
+
+def fc_meta(horizon: str) -> dict:
+    for t in meta.get("forecasts", []):
+        if t["horizon"] == horizon:
+            return t
+    return {"target_day": base_day, "inputs_age_days": "?", "validation": {}}
 
 # -----------------------------------------------------------------------------
 # Top bar
@@ -453,7 +484,7 @@ tab_fc, tab_station, tab_history, tab_method = st.tabs(
     ["Forecast", "Station", "Network history", "Method"])
 
 EMPTY_FC = ('<div class="empty"><b>No forecast has been generated yet.</b><br>'
-            'Run <code>python3 src/models/predict_today.py</code> from the repository '
+            'Run <code>python3 src/models/predict_daily.py</code> from the repository '
             'root, then reload this page.</div>')
 
 
@@ -464,158 +495,161 @@ with tab_fc:
     if not has_fc:
         st.markdown(EMPTY_FC, unsafe_allow_html=True)
     else:
-        alert_hours = fc.groupby("site_name")["alert_monitored"].sum()
-        alerted = alert_hours[alert_hours > 0].sort_values(ascending=False).index.tolist()
-        top = fc.loc[fc["prob_monitored"].idxmax()]
-        n_st = fc["site_id"].nunique()
-        age_h = (issued - obs_to).total_seconds() / 3600
+        horizons = [h for h in ("today", "tomorrow") if h in set(fc["horizon"])]
+        h_labels = {h: f"{h.title()} · {day_label(fc_meta(h)['target_day'])}" for h in horizons}
+        c_h, c_v = st.columns([1, 1])
+        with c_h:
+            horizon = st.segmented_control("Day", horizons, default=horizons[0],
+                                           format_func=lambda h: h_labels[h],
+                                           label_visibility="collapsed") or horizons[0]
+        with c_v:
+            view = st.segmented_control("View", ["With own sensor", "Without sensor"],
+                                        default="With own sensor",
+                                        label_visibility="collapsed") or "With own sensor"
+        use_mon = view != "Without sensor"
+        pcol = "prob_with_sensor" if use_mon else "prob_without_sensor"
+        acol = "alert_with_sensor" if use_mon else "alert_without_sensor"
+        hfc = fc[fc["horizon"] == horizon].copy()
+        hmeta = fc_meta(horizon)
+        target_txt = day_label(hmeta["target_day"])
+        alerted = hfc[hfc[acol] == 1].sort_values(pcol, ascending=False)
+        ranked = hfc.dropna(subset=[pcol]).sort_values(pcol, ascending=False)
+        top = ranked.iloc[0] if not ranked.empty else None
+        n_st = int(hfc["site_id"].nunique())
+        when = "today" if horizon == "today" else "tomorrow"
 
-        if alerted:
+        if len(alerted):
             pill = '<span class="pill alert"><span class="dot"></span>Advisory</span>'
-            title = (f"Advisory for {nice(alerted[0])}" if len(alerted) == 1
-                     else f"Advisory for {len(alerted)} stations")
-            sub = f"Chance of PM2.5 exceeding 25 µg/m³ passes {pct(thr_mon)} in the next 24 hours."
+            title = (f"Advisory for {nice(alerted['site_name'].iloc[0])} {when}"
+                     if len(alerted) == 1 else f"Advisory for {len(alerted)} stations {when}")
+            sub = (f"Chance that the daily average goes over 25 µg/m³ passes "
+                   f"{pct(thr)} on {target_txt}.")
         else:
             pill = '<span class="pill clear"><span class="dot"></span>All clear</span>'
-            title = "No advisories in the next 24 hours"
-            sub = f"Every station stays below the {pct(thr_mon)} advisory level."
+            title = f"No advisories {when}"
+            sub = (f"Every station stays below a {pct(thr)} chance of a daily average "
+                   f"over 25 µg/m³ on {target_txt}.")
 
         st.markdown(
             f'<div class="hero">{pill}<div class="hero-title">{title}</div>'
             f'<div class="hero-sub">{sub}</div><div class="stats">'
-            + stat("Highest chance", pct(top["prob_monitored"]),
-                   f'{nice(top["site_name"])}, {hour_label(top["timestamp"])}', ORANGE)
+            + stat("Highest chance", pct(top[pcol]) if top is not None else "—",
+                   nice(top["site_name"]) if top is not None else "", ORANGE)
             + stat("Stations on advisory", f"{len(alerted)} of {n_st}",
-                   "with their own sensors", VIOLET)
-            + stat("Advisory level", pct(thr_mon), "lowest cost when tested", AMBER)
-            + stat("Readings age", f"{age_h:.0f} h", f"up to {day_hour(obs_to)}", TEAL)
+                   view.lower(), VIOLET)
+            + stat("Advisory level", pct(thr), "lowest cost in testing", AMBER)
+            + stat("Newest full day", day_label(base_day),
+                   f"{hmeta['inputs_age_days']} days before {target_txt}", TEAL)
             + '</div></div>',
             unsafe_allow_html=True)
 
-        # ---- 24-hour grid ---------------------------------------------------
-        with st.container(border=True):
-            head_l, head_r = st.columns([1.3, 1])
-            with head_l:
-                panel_head("Next 24 hours",
-                           "Chance of exceeding 25 µg/m³, by station and hour.")
-            with head_r:
-                view = st.segmented_control(
-                    "View", ["With own sensor", "Without sensor"],
-                    default="With own sensor", label_visibility="collapsed")
-            use_mon = view != "Without sensor"
-            pcol = "prob_monitored" if use_mon else "prob_unmonitored"
-            acol = "alert_monitored" if use_mon else "alert_unmonitored"
-
-            order = fc.groupby("site_name")[pcol].max().sort_values().index.tolist()
-            grid = fc.pivot_table(index="site_name", columns="timestamp",
-                                  values=pcol, aggfunc="first").reindex(order)
-            heat = go.Figure(go.Heatmap(
-                z=grid.values, x=grid.columns, y=[nice(s) for s in grid.index],
-                colorscale=RISK_SCALE, zmin=0, zmax=PROB_MAX, xgap=3, ygap=3,
-                colorbar=dict(tickvals=[0, .05, .10, .20, .30],
-                              ticktext=["0%", "5%", "10%", "20%", "30%+"],
-                              thickness=8, len=.8, outlinewidth=0,
-                              tickfont=dict(color=MUTED, size=11)),
-                hovertemplate="<b>%{y}</b><br>%{x|%-I %p, %-d %b}"
-                              "<br>Chance: %{z:.1%}<extra></extra>"))
-            hits = fc[fc[acol] == 1]
-            if not hits.empty:
-                heat.add_trace(go.Scatter(
-                    x=hits["timestamp"], y=[nice(s) for s in hits["site_name"]],
-                    mode="markers", marker=dict(size=6, color=CANVAS),
-                    hoverinfo="skip", showlegend=False))
-            style_fig(heat, height=80 + 30 * len(order))
-            heat.update_xaxes(tickformat="%-I %p", dtick=3 * 3600 * 1000, showgrid=False,
-                              showline=False)
-            heat.update_yaxes(showgrid=False, showline=False, ticks="", tickfont=dict(color=INK))
-            show(heat)
-
-        st.write("")
-
         # ---- map + ranking ----------------------------------------------------
         m_col, r_col = st.columns([1.45, 1], gap="medium")
-        peaks = (fc.groupby(["site_id", "site_name", "region", "latitude", "longitude"],
-                            as_index=False)[pcol].max()
-                   .sort_values(pcol, ascending=False))
-
+        mp = hfc.dropna(subset=[pcol, "latitude", "longitude"])
         with m_col:
             with st.container(border=True):
-                panel_head("Map", "Highest chance at each station over the next 24 hours.")
+                panel_head("Map", f"Chance of a daily average over 25 µg/m³ on {target_txt}.")
                 fmap = go.Figure(go.Scattermap(
-                    lat=peaks["latitude"], lon=peaks["longitude"], mode="markers",
-                    text=[nice(s) for s in peaks["site_name"]],
-                    customdata=np.stack([peaks["region"], peaks[pcol]], axis=-1),
-                    marker=dict(size=18, color=peaks[pcol], colorscale=RISK_SCALE,
+                    lat=mp["latitude"], lon=mp["longitude"], mode="markers",
+                    text=[nice(s) for s in mp["site_name"]],
+                    customdata=np.stack([mp["region"].fillna(""), mp[pcol]], axis=-1),
+                    marker=dict(size=18, color=mp[pcol], colorscale=RISK_SCALE,
                                 cmin=0, cmax=PROB_MAX, opacity=.95),
                     hovertemplate="<b>%{text}</b><br>%{customdata[0]}"
-                                  "<br>Highest chance %{customdata[1]:.1%}<extra></extra>"))
+                                  "<br>Chance %{customdata[1]:.1%}<extra></extra>"))
                 style_fig(fmap, height=430)
                 fmap.update_layout(map=dict(
                     style="carto-darkmatter", zoom=8.4,
-                    center=dict(lat=float(peaks["latitude"].mean()),
-                                lon=float(peaks["longitude"].mean()))))
+                    center=dict(lat=float(mp["latitude"].mean()),
+                                lon=float(mp["longitude"].mean()))))
                 show(fmap)
 
         with r_col:
             with st.container(border=True):
-                panel_head("Stations", "Ranked by highest chance.")
+                panel_head("Stations", f"Ranked by chance. Amber and red bars are at or above the {pct(thr)} advisory level.")
                 rows = []
-                for _, r in peaks.iterrows():
-                    p = float(r[pcol])
-                    w = min(p / PROB_MAX, 1) * 100
+                for _, r in hfc.sort_values(pcol, ascending=False, na_position="last").iterrows():
+                    p = r[pcol]
+                    if pd.isna(p):
+                        bar, val = '<div class="bar"></div>', "no data"
+                    else:
+                        w = min(float(p) / PROB_MAX, 1) * 100
+                        bar = (f'<div class="bar"><span style="width:{max(w, 2):.1f}%;'
+                               f'background:{risk_colour(float(p))}"></span></div>')
+                        val = pct(float(p))
                     rows.append(
                         f'<div class="rank-row"><div><div class="rank-name">{nice(r["site_name"])}</div>'
-                        f'<div class="rank-region">{r["region"]}</div></div>'
-                        f'<div class="bar"><span style="width:{max(w, 2):.1f}%;'
-                        f'background:{risk_colour(p)}"></span></div>'
-                        f'<div class="rank-val">{pct(p)}</div></div>')
-                st.markdown(f'<div class="rank">{"".join(rows)}</div>',
-                            unsafe_allow_html=True)
+                        f'<div class="rank-region">{r["region"] if pd.notna(r["region"]) else ""}</div></div>'
+                        f'{bar}<div class="rank-val">{val}</div></div>')
+                st.markdown(f'<div class="rank">{"".join(rows)}</div>', unsafe_allow_html=True)
+
+        st.write("")
+
+        # ---- how much to trust it ---------------------------------------------
+        with st.container(border=True):
+            v = hmeta.get("validation", {})
+            panel_head("How much to trust this forecast",
+                       f"Share of bad days caught in years the model never saw, using readings "
+                       f"{hmeta['inputs_age_days']} days old as here, compared with assuming "
+                       "the newest full day repeats.")
+            cards = []
+            for period, colour in [("2019-20 smoke", ORANGE), ("2021-23", ACCENT), ("2024-25", TEAL)]:
+                pv = v.get(period)
+                if not pv:
+                    continue
+                key = "with_sensor" if use_mon else "without_sensor"
+                base = "persistence" if use_mon else "network_persistence"
+                m, b = pv.get(key, {}), pv.get(base, {})
+                note = (f'{int(m.get("events") or 0)} bad days · repeat-the-newest-day '
+                        f'caught {pct(b.get("recall") or 0, 0)}')
+                cards.append(stat(period.replace("-", "–"), pct(m.get("recall") or 0, 0),
+                                  note, colour))
+            st.markdown('<div class="stats" style="grid-template-columns:repeat(3,minmax(0,1fr))">'
+                        + "".join(cards) + '</div>', unsafe_allow_html=True)
+            st.markdown(
+                '<div class="panel-sub" style="margin-top:.8rem">Useful during smoke that builds '
+                'over several days. It cannot see sudden one-day spikes coming, and most '
+                'advisories in quiet periods are false alarms. Details in Method.</div>',
+                unsafe_allow_html=True)
 
         st.write("")
 
         # ---- sensor comparison ---------------------------------------------
         with st.container(border=True):
             panel_head("What a missing sensor changes",
-                       "From our original validation, which trained on neighbouring stations over the "
-                       "same days it tested. Being re-measured with a stricter test; see Method.")
-            f_col, c_col = st.columns([1, 1.8], gap="large")
-            with f_col:
+                       f"Each station's chance for {target_txt}, from its own sensor and "
+                       "neighbours (filled) or from neighbours only (hollow).")
+            cmp = hfc.dropna(subset=["prob_with_sensor"]).sort_values("prob_with_sensor")
+            names = [nice(s) for s in cmp["site_name"]]
+            xs, ys = [], []
+            for n, a, b in zip(names, cmp["prob_without_sensor"], cmp["prob_with_sensor"]):
+                xs += [a, b, None]
+                ys += [n, n, None]
+            dumb = go.Figure()
+            dumb.add_trace(go.Scatter(x=xs, y=ys, mode="lines",
+                                      line=dict(color="rgba(255,255,255,0.12)", width=4),
+                                      hoverinfo="skip", showlegend=False))
+            dumb.add_trace(go.Scatter(
+                x=cmp["prob_without_sensor"], y=names, mode="markers", name="Without sensor",
+                marker=dict(size=11, color=PANEL, line=dict(color=MUTED, width=2)),
+                hovertemplate="%{y}<br>Without sensor: %{x:.1%}<extra></extra>"))
+            dumb.add_trace(go.Scatter(
+                x=cmp["prob_with_sensor"], y=names, mode="markers", name="With own sensor",
+                marker=dict(size=11, color=ACCENT),
+                hovertemplate="%{y}<br>With sensor: %{x:.1%}<extra></extra>"))
+            dumb.add_vline(x=thr, line_dash="dash", line_color=AMBER, line_width=1.2)
+            style_fig(dumb, height=60 + 26 * max(len(names), 1))
+            dumb.update_xaxes(tickformat=".0%", rangemode="tozero")
+            dumb.update_yaxes(showgrid=False, showline=False, ticks="", tickfont=dict(color=INK))
+            show(dumb)
+            smoke = hmeta.get("validation", {}).get("2019-20 smoke", {})
+            if smoke:
                 st.markdown(
-                    f'<div class="figure"><div class="figure-value" style="color:{ORANGE}">'
-                    f'−{pct(PRECISION_PENALTY)}</div>'
-                    f'<div class="figure-label">Precision without a sensor, original test</div>'
-                    f'<div class="figure-note">95% CI {pct(PRECISION_CI[0])} to '
-                    f'{pct(PRECISION_CI[1])}. More false alarms.</div></div>'
-                    f'<div class="figure"><div class="figure-value" style="color:{GREEN}">≈ 0</div>'
-                    f'<div class="figure-label">Change in events caught, original test</div>'
-                    f'<div class="figure-note">Recall 38% with a sensor, 37% without.</div></div>',
+                    f'<div class="panel-sub">In the 2019–20 smoke test this forecast caught '
+                    f'{pct(smoke["with_sensor"]["recall"], 0)} of bad days with the station\'s own sensor '
+                    f'and {pct(smoke["without_sensor"]["recall"], 0)} from neighbours alone. Smoke covers '
+                    'the whole basin, so neighbours carry most of the signal.</div>',
                     unsafe_allow_html=True)
-            with c_col:
-                cmp = (fc.groupby("site_name", as_index=False)
-                         .agg(mon=("prob_monitored", "max"), unmon=("prob_unmonitored", "max"))
-                         .sort_values("mon"))
-                names = [nice(s) for s in cmp["site_name"]]
-                xs, ys = [], []
-                for n, a, b in zip(names, cmp["unmon"], cmp["mon"]):
-                    xs += [a, b, None]
-                    ys += [n, n, None]
-                dumb = go.Figure()
-                dumb.add_trace(go.Scatter(x=xs, y=ys, mode="lines",
-                                          line=dict(color="rgba(255,255,255,0.12)", width=4),
-                                          hoverinfo="skip", showlegend=False))
-                dumb.add_trace(go.Scatter(
-                    x=cmp["unmon"], y=names, mode="markers", name="Without sensor",
-                    marker=dict(size=11, color=PANEL, line=dict(color=MUTED, width=2)),
-                    hovertemplate="%{y}<br>Without sensor: %{x:.1%}<extra></extra>"))
-                dumb.add_trace(go.Scatter(
-                    x=cmp["mon"], y=names, mode="markers", name="With own sensor",
-                    marker=dict(size=11, color=ACCENT),
-                    hovertemplate="%{y}<br>With sensor: %{x:.1%}<extra></extra>"))
-                style_fig(dumb, height=60 + 26 * len(names))
-                dumb.update_xaxes(tickformat=".0%", rangemode="tozero")
-                dumb.update_yaxes(showgrid=False, showline=False, ticks="", tickfont=dict(color=INK))
-                show(dumb)
 
 
 # =============================================================================
@@ -625,17 +659,24 @@ with tab_station:
     if not has_fc:
         st.markdown(EMPTY_FC, unsafe_allow_html=True)
     else:
-        ranked = (fc.groupby("site_name")["prob_monitored"].max()
-                    .sort_values(ascending=False).index.tolist())
+        today_fc = fc[fc["horizon"] == fc["horizon"].iloc[0]]
+        ranked = (today_fc.sort_values("prob_without_sensor", ascending=False)["site_name"]
+                  .tolist())
         st.write("")
         sel = st.selectbox("Station", ranked, format_func=nice,
-                           help="Ordered from highest to lowest forecast chance.")
-        sfc = fc[fc["site_name"] == sel].sort_values("timestamp")
-        region = str(sfc["region"].iloc[0])
-        peak = sfc.loc[sfc["prob_monitored"].idxmax()]
+                           help="Ordered from highest to lowest chance.")
+        sfc = fc[fc["site_name"] == sel].set_index("horizon")
+        first = sfc.iloc[0]
+        region = first["region"] if pd.notna(first["region"]) else ""
         rate_row = station_rates[station_rates["site_name"] == sel]
         rate_txt = f'{rate_row["rate_pct"].iloc[0]:.2f}%' if not rate_row.empty else "—"
-        on_alert = int(sfc["alert_monitored"].sum())
+        on_alert = bool(sfc["alert_with_sensor"].max() or sfc["alert_without_sensor"].max())
+        last_mean = first["last_daily_mean"]
+
+        def chance(h, col):
+            if h not in sfc.index or pd.isna(sfc.loc[h, col]):
+                return "—"
+            return pct(float(sfc.loc[h, col]))
 
         pill = ('<span class="pill alert"><span class="dot"></span>Advisory</span>'
                 if on_alert else
@@ -643,60 +684,71 @@ with tab_station:
         st.markdown(
             f'<div class="hero">{pill} <span class="pill neutral">{region}</span>'
             f'<div class="hero-title">{nice(sel)}</div>'
-            f'<div class="hero-sub">Forecast for the next 24 hours, with recent readings.</div>'
-            f'<div class="stats">'
-            + stat("Highest chance", pct(peak["prob_monitored"]), f'around {hour_label(peak["timestamp"])}', ORANGE)
-            + stat("Without its sensor", pct(sfc["prob_unmonitored"].max()), "highest chance", VIOLET)
-            + stat("Hours on advisory", str(on_alert), "in the next 24", AMBER)
-            + stat("Exceeded 2023–24", rate_txt, f"network {network_rate_pct:.2f}%", TEAL)
+            f'<div class="hero-sub">Chance that the daily average goes over 25 µg/m³, '
+            f'with recent readings.</div><div class="stats">'
+            + stat("Today", chance("today", "prob_with_sensor"),
+                   f'without its sensor {chance("today", "prob_without_sensor")}', ORANGE)
+            + stat("Tomorrow", chance("tomorrow", "prob_with_sensor"),
+                   f'without its sensor {chance("tomorrow", "prob_without_sensor")}', VIOLET)
+            + stat(f"Average on {day_label(base_day)}",
+                   f"{last_mean:.1f}" if pd.notna(last_mean) else "—",
+                   "µg/m³, newest full day", AMBER)
+            + stat("Hours over 25, 2023–24", rate_txt, f"network {network_rate_pct:.2f}%", TEAL)
             + '</div></div>',
             unsafe_allow_html=True)
 
-        c1, c2 = st.columns(2, gap="medium")
+        c1, c2 = st.columns([1.4, 1], gap="medium")
         with c1:
             with st.container(border=True):
-                panel_head("Last ten days", "Hourly PM2.5 readings.")
+                panel_head("Last ten days", "Hourly PM2.5 readings, with each day's average.")
                 recent = load_recent_readings()
                 source = recent if recent is not None else obs[["site_name", "timestamp", "value"]]
                 win = source[(source["site_name"] == sel)
                              & (source["timestamp"] > issued - pd.Timedelta(days=10))
                              & (source["timestamp"] <= issued)].sort_values("timestamp")
                 if win.empty:
-                    st.markdown(
-                        '<div class="panel-sub">Recent readings aren\'t in this deployment. '
-                        'Commit <code>data/processed/latest_observations.parquet</code> '
-                        'to show them.</div>', unsafe_allow_html=True)
+                    st.markdown('<div class="panel-sub">No recent readings for this station.</div>',
+                                unsafe_allow_html=True)
                 else:
+                    dm = (win.assign(day=win["timestamp"].dt.floor("D"))
+                             .groupby("day")["value"].agg(["mean", "count"]))
+                    dm = dm[dm["count"] >= 18]
                     rfig = go.Figure(go.Scatter(
-                        x=win["timestamp"], y=win["value"], mode="lines",
-                        line=dict(color=ACCENT, width=2), fill="tozeroy",
-                        fillcolor="rgba(79,140,255,.16)",
+                        x=win["timestamp"], y=win["value"], mode="lines", name="Hourly",
+                        line=dict(color=ACCENT, width=1.6), fill="tozeroy",
+                        fillcolor="rgba(79,140,255,.14)",
                         hovertemplate="%{x|%-d %b, %-I %p}<br>%{y:.1f} µg/m³<extra></extra>"))
+                    rfig.add_trace(go.Scatter(
+                        x=dm.index + pd.Timedelta(hours=12), y=dm["mean"], mode="markers+lines",
+                        name="Daily average", line=dict(color=AMBER, width=2),
+                        marker=dict(size=7, color=AMBER),
+                        hovertemplate="%{x|%-d %b}<br>Daily average %{y:.1f} µg/m³<extra></extra>"))
                     threshold_line(rfig, THRESHOLD, "25 µg/m³", DANGER)
                     style_fig(rfig, height=320)
                     rfig.update_yaxes(title="µg/m³", rangemode="tozero")
-                    rfig.update_layout(showlegend=False)
                     show(rfig)
 
         with c2:
             with st.container(border=True):
-                panel_head("Next 24 hours", "Chance of exceeding 25 µg/m³.")
-                ffig = go.Figure()
-                ffig.add_trace(go.Scatter(
-                    x=sfc["timestamp"], y=sfc["prob_unmonitored"], mode="lines",
-                    name="Without sensor", line=dict(color=VIOLET, width=2, dash="dot"),
-                    hovertemplate="%{x|%-I %p}<br>Without sensor: %{y:.1%}<extra></extra>"))
-                ffig.add_trace(go.Scatter(
-                    x=sfc["timestamp"], y=sfc["prob_monitored"], mode="lines",
-                    name="With own sensor", line=dict(color=ACCENT, width=2.6),
-                    hovertemplate="%{x|%-I %p}<br>With sensor: %{y:.1%}<extra></extra>"))
-                threshold_line(ffig, thr_mon, f"Advisory {pct(thr_mon)}", AMBER)
-                style_fig(ffig, height=320)
-                ymax = max(float(sfc[["prob_monitored", "prob_unmonitored"]].max().max()),
-                           thr_unmon) * 1.3
-                ffig.update_yaxes(tickformat=".0%", range=[0, ymax])
-                ffig.update_xaxes(tickformat="%-I %p")
-                show(ffig)
+                panel_head("Chance of a bad day", "Daily average over 25 µg/m³.")
+                hs = [h for h in ("today", "tomorrow") if h in sfc.index]
+                xl = [f"{h.title()}<br>{day_label(sfc.loc[h, 'target_day'])}" for h in hs]
+                bfig = go.Figure()
+                bfig.add_trace(go.Bar(
+                    x=xl, y=[sfc.loc[h, "prob_with_sensor"] for h in hs], name="With own sensor",
+                    marker_color=ACCENT,
+                    hovertemplate="%{x}<br>With sensor: %{y:.1%}<extra></extra>"))
+                bfig.add_trace(go.Bar(
+                    x=xl, y=[sfc.loc[h, "prob_without_sensor"] for h in hs], name="Without sensor",
+                    marker_color=VIOLET,
+                    hovertemplate="%{x}<br>Without sensor: %{y:.1%}<extra></extra>"))
+                threshold_line(bfig, thr, f"Advisory {pct(thr)}", AMBER)
+                style_fig(bfig, height=320)
+                ymax = max(float(np.nanmax(sfc[["prob_with_sensor", "prob_without_sensor"]]
+                                           .to_numpy(dtype=float))), thr) * 1.35
+                bfig.update_yaxes(tickformat=".0%", range=[0, ymax])
+                bfig.update_layout(barmode="group", bargap=.35)
+                show(bfig)
 
 
 # =============================================================================
@@ -847,16 +899,19 @@ with tab_method:
     st.markdown(
         '<div class="hero"><span class="pill neutral">How it works</span>'
         '<div class="hero-title">From readings to an advisory</div>'
-        '<div class="hero-sub">Forecasts for 18 Sydney stations, tested two ways. '
-        'The stricter test, on days the model has never seen, is the one to trust.</div></div>',
+        '<div class="hero-sub">A daily forecast for each Sydney station, tested on years '
+        'the model never saw and at stations it was not trained on.</div></div>',
         unsafe_allow_html=True)
 
     steps = [
-        ("Fetch", "Hourly readings from the NSW Air Quality API, recent weather from Open-Meteo."),
-        ("Describe neighbours", "What nearby stations read now, weighted by distance and wind."),
-        ("Estimate chance", "Two models trained on 2023–2024: with and without the station's own sensor."),
-        ("Decide", "Advisory when the chance passes the level with the lowest cost in testing."),
-        ("Publish", "Computed in a batch job and written to a small file this page reads."),
+        ("Fetch", "Hourly PM2.5 from the NSW Air Quality API, every morning. Readings arrive "
+                  "about 40 hours late."),
+        ("Summarise", "Daily averages for each station and its neighbours, weighted by distance."),
+        ("Estimate chance", "Logistic regression trained on 2016–2025: one model with the "
+                            "station's own sensor, one from neighbours only."),
+        ("Decide", "Advisory when the chance passes 9.1%, where a missed bad day costs ten "
+                   "times a false alarm."),
+        ("Publish", "A batch job writes a small file this page reads."),
     ]
     st.markdown(
         '<div class="steps">' + "".join(
@@ -865,43 +920,67 @@ with tab_method:
             f'<div class="step-d">{d}</div></div>' for i, ((t, d), c) in enumerate(zip(steps, [ACCENT, VIOLET, TEAL, AMBER, GREEN]), 1))
         + '</div>', unsafe_allow_html=True)
 
+    val = load_validation()
     a, b = st.columns([1.35, 1], gap="medium")
     with a:
         with st.container(border=True):
             panel_head("How well it works",
-                       "Averages across 18 stations, each held out in turn. Original test: trained "
-                       "on the other stations over the same days. Stricter test: trained on the "
-                       "other stations in 2023, tested on 2024.")
+                       "Share of bad days caught (and share of advisories that were right). "
+                       "Each station held out in turn; each test period unseen in training.")
+            if val.empty:
+                st.markdown('<div class="panel-sub">Validation results are not in this '
+                            'deployment.</div>', unsafe_allow_html=True)
+            else:
+                ages = {"On-time readings": 0, "1 day late (today)": 1, "2 days late (tomorrow)": 2}
+                age = st.segmented_control("Readings", list(ages), default="1 day late (today)",
+                                           label_visibility="collapsed") or "1 day late (today)"
+                d = ages[age]
+                periods = ["2019-20 smoke", "2021-23", "2024-25"]
+                labels = {"with_sensor": "With own sensor", "without_sensor": "Without own sensor",
+                          "persistence": "Newest day repeats", "network_persistence":
+                          "Neighbours' newest day repeats"}
+                head = "".join(f'<th class="num">{p.replace("-", "–")}</th>' for p in periods)
+                body = ""
+                for mth, lab in labels.items():
+                    cells = ""
+                    for p in periods:
+                        r = val[(val["period"] == p) & (val["delay_days"] == d) & (val["method"] == mth)]
+                        if r.empty:
+                            cells += '<td class="num">—</td>'
+                            continue
+                        r = r.iloc[0]
+                        prec = "—" if pd.isna(r["precision"]) else pct(r["precision"], 0)
+                        cells += (f'<td class="num">{pct(r["recall"], 0)} '
+                                  f'<span style="color:{MUTED};font-weight:500">({prec})</span></td>')
+                    body += f'<tr><td>{lab}</td>{cells}</tr>'
+                ev = {p: int(val[(val["period"] == p) & (val["delay_days"] == d)]["events"].max())
+                      for p in periods if not val[(val["period"] == p)].empty}
+                body += ('<tr><td style="color:' + MUTED + '">Bad station-days</td>'
+                         + "".join(f'<td class="num" style="color:{MUTED}">{ev.get(p, "—")}</td>'
+                                   for p in periods) + '</tr>')
+                st.markdown(f'<table class="results"><tr><th>Forecast</th>{head}</tr>{body}</table>',
+                            unsafe_allow_html=True)
             st.markdown(
-                '<table class="results">'
-                '<tr><th></th><th colspan="2" style="text-align:center">Original test</th>'
-                '<th colspan="2" style="text-align:center">Stricter test</th></tr>'
-                '<tr><th>Forecast</th><th class="num">Caught</th><th class="num">Right</th>'
-                '<th class="num">Caught</th><th class="num">Right</th></tr>'
-                '<tr><td>With own sensor</td><td class="num">38%</td><td class="num">36%</td>'
-                '<td class="num">3%</td><td class="num">5%</td></tr>'
-                '<tr><td>Without own sensor</td><td class="num">37%</td><td class="num">31%</td>'
-                '<td class="num">3%</td><td class="num">3%</td></tr>'
-                '<tr><td>"Tomorrow like today"</td><td class="num">10%</td><td class="num">10%</td>'
-                '<td class="num">10%</td><td class="num">10%</td></tr>'
-                '</table>'
-                '<div class="panel-sub" style="margin-top:.8rem">Smoke events hit the whole basin '
-                'at once, so the original test could learn each day\'s outcome from the neighbouring '
-                'stations, which a real forecast cannot. On unseen days the model does not yet beat '
-                '"tomorrow like today". Improving it is the main work before the final report.</div>',
-                unsafe_allow_html=True)
+                '<div class="panel-sub" style="margin-top:.8rem">In the 2019–20 smoke the model '
+                'catches more bad days than "newest day repeats" at every reading age, and the '
+                'difference holds up statistically. In 2021–23 it catches more with on-time '
+                'readings, though that could be chance, and with late readings it does slightly '
+                'worse because of extra false alarms. In 2024–25 the few bad days were sudden '
+                'spikes that nothing predicted.</div>', unsafe_allow_html=True)
     with b:
         with st.container(border=True):
             panel_head("Limitations")
             st.markdown(
                 '<ul class="limits">'
-                '<li>On days it has not seen, the model does not yet beat a forecast of '
-                '"tomorrow like today". The original validation figures were optimistic.</li>'
-                '<li>Each forecast uses conditions 24 hours before the hour it predicts, '
-                'as in training.</li>'
-                '<li>Station readings arrive about 40 hours late, so neighbour and station '
-                'inputs are older than in testing, which lowers accuracy further.</li>'
-                '<li>Most warnings would be false alarms. A prototype, not an alert service.</li>'
+                '<li>Readings arrive about 40 hours late, so today\'s forecast uses data from '
+                'the day before yesterday. Fresher data would help more than a better model.</li>'
+                '<li>It forecasts smoke that builds over several days. Sudden one-day spikes, '
+                'such as a nearby burn, come without warning.</li>'
+                '<li>Advisories are set so missing a bad day costs ten times a false alarm, so '
+                'most advisories outside smoke seasons are false alarms.</li>'
+                '<li>An earlier hourly model looked accurate only because its test shared days '
+                'with its training. On unseen days it caught 3% of bad hours, so it was replaced.</li>'
+                '<li>A prototype, not an alert service.</li>'
                 '</ul>', unsafe_allow_html=True)
 
 st.markdown(

@@ -18,7 +18,9 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy.optimize import minimize
 from scipy.stats import binomtest
+from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
@@ -50,7 +52,7 @@ def parse_years(s):
     return sorted(set(years))
 
 
-def load_daily():
+def load_daily(obs_dir=OBS_DIR):
     # Hourly observations -> one row per station-day.
     # Read one year at a time, only the columns and rows needed: the full
     # 2016-2025 store does not fit in memory with every column loaded.
@@ -58,7 +60,7 @@ def load_daily():
             "parameter", "frequency", "timestamp", "value"]
     keep = ["PM2.5", "TEMP", "HUMID", "WSP", "WDR"]
     parts = []
-    for year_dir in sorted(OBS_DIR.glob("year=*")):
+    for year_dir in sorted(Path(obs_dir).glob("year=*")):
         part = pd.read_parquet(year_dir, columns=cols,
                                filters=[("frequency", "==", "Hourly average"),
                                         ("parameter", "in", keep)])
@@ -144,24 +146,64 @@ def network_features(daily, sites):
     return pd.concat(out, ignore_index=True)
 
 
-def build_table(daily, sites, delay):
-    #One row per (station, target day T) with features from base day B
+OWN_COLS = ["pm_mean", "pm_max", "pm_min", "pm_std", "pm_eve"]
+NET_COLS = ["net_mean", "net_max", "net_n_over", "net_idw", "net_nearest"]
+
+
+def daily_features(daily, sites):
+    # One row per (station, base day B): everything known at the end of B.
+    # Shared by this experiment and the live forecast (predict_daily.py).
     d = complete_grid(daily).merge(network_features(daily, sites),
                                    on=["day", "site_id"], how="left")
     d = d.sort_values(["site_id", "day"]).reset_index(drop=True)
     g = d.groupby("site_id")
 
     feat = pd.DataFrame({"site_id": d["site_id"], "base_day": d["day"]})
-    own_cols = ["pm_mean", "pm_max", "pm_min", "pm_std", "pm_eve"]
-    net_cols = ["net_mean", "net_max", "net_n_over", "net_idw", "net_nearest"]
     w_cols = [c for c in d.columns if c.startswith("w_")]
-    for c in own_cols + net_cols + w_cols:
+    for c in OWN_COLS + NET_COLS + w_cols:
         feat[c] = d[c]
-    feat["pm_mean_lag1"] = g["pm_mean"].shift(1)
-    feat["pm_mean_lag2"] = g["pm_mean"].shift(2)
-    feat["pm_mean_3d"] = g["pm_mean"].transform(lambda s: s.rolling(3, min_periods=2).mean())
-    feat["net_mean_lag1"] = g["net_mean"].shift(1)
-    feat["net_idw_lag1"] = g["net_idw"].shift(1)
+    # A missing earlier day is filled with the newest day that is available,
+    # and the 3-day mean uses whichever of the three days exist. Otherwise a
+    # station that went offline during smoke (Oakdale, December 2019) gets its
+    # gaps filled with a typical clean-air value and its forecast collapses.
+    feat["pm_mean_lag1"] = g["pm_mean"].shift(1).fillna(feat["pm_mean"])
+    feat["pm_mean_lag2"] = g["pm_mean"].shift(2).fillna(feat["pm_mean_lag1"])
+    feat["pm_mean_3d"] = g["pm_mean"].transform(lambda s: s.rolling(3, min_periods=1).mean())
+    feat["net_mean_lag1"] = g["net_mean"].shift(1).fillna(feat["net_mean"])
+    feat["net_idw_lag1"] = g["net_idw"].shift(1).fillna(feat["net_idw"])
+    return feat, d, w_cols
+
+
+def add_calendar(t):
+    # Calendar of the target day T (known in advance)
+    doy = t["day"].dt.dayofyear
+    t["doy_sin"] = np.sin(2 * np.pi * doy / 365.25)
+    t["doy_cos"] = np.cos(2 * np.pi * doy / 365.25)
+    t["month"] = t["day"].dt.month
+    t["dayofweek"] = t["day"].dt.dayofweek
+    t["year"] = t["day"].dt.year
+    return t
+
+
+def feature_sets(w_cols):
+    own = OWN_COLS + ["pm_mean_lag1", "pm_mean_lag2", "pm_mean_3d"]
+    net = NET_COLS + ["net_mean_lag1", "net_idw_lag1"]
+    cal = ["doy_sin", "doy_cos", "month", "dayofweek"]
+    # Logistic model: pollution features only. The gradient-boosting model
+    # also sees weather and calendar, and learned from the training years
+    # that summer pollution usually clears by the next day; in the 2019-20
+    # smoke it did not, and the model missed most bad days.
+    pm_own = [c for c in own if c != "pm_std"]
+    return {
+        "logistic": {"with_sensor": pm_own + net, "without_sensor": net},
+        "hgb": {"with_sensor": own + net + w_cols + cal,
+                "without_sensor": net + w_cols + cal},
+    }
+
+
+def build_table(daily, sites, delay):
+    # One row per (station, target day T) with features from base day B
+    feat, d, w_cols = daily_features(daily, sites)
 
     # target day T = base day + 1 + delay, same station
     lead = 1 + delay
@@ -169,28 +211,7 @@ def build_table(daily, sites, delay):
     tgt = d[["site_id", "day", "pm_mean"]].rename(columns={"pm_mean": "target"})
     t = feat.merge(tgt, on=["site_id", "day"], how="inner").dropna(subset=["target"])
     t["y"] = (t["target"] > THRESHOLD).astype(int)
-
-    doy = t["day"].dt.dayofyear
-    t["doy_sin"] = np.sin(2 * np.pi * doy / 365.25)
-    t["doy_cos"] = np.cos(2 * np.pi * doy / 365.25)
-    t["month"] = t["day"].dt.month
-    t["dayofweek"] = t["day"].dt.dayofweek
-    t["year"] = t["day"].dt.year
-
-    own = own_cols + ["pm_mean_lag1", "pm_mean_lag2", "pm_mean_3d"]
-    net = net_cols + ["net_mean_lag1", "net_idw_lag1"]
-    cal = ["doy_sin", "doy_cos", "month", "dayofweek"]
-    # Logistic model: pollution features only. The gradient-boosting model
-    # also sees weather and calendar, and learned from the training years
-    # that summer pollution usually clears by the next day; in the 2019-20
-    # smoke it did not, and the model missed most bad days (see AIR-24 notes).
-    pm_own = [c for c in own if c != "pm_std"]
-    fsets = {
-        "logistic": {"with_sensor": pm_own + net, "without_sensor": net},
-        "hgb": {"with_sensor": own + net + w_cols + cal,
-                "without_sensor": net + w_cols + cal},
-    }
-    return t, fsets
+    return add_calendar(t), feature_sets(w_cols)
 
 
 # ---- metrics ----
@@ -199,12 +220,48 @@ def log_clip(X):
     return np.log1p(np.clip(X, 0, None))
 
 
+class NonNegLogistic(BaseEstimator, ClassifierMixin):
+
+    def __init__(self, C=1.0):
+        self.C = C
+
+    def fit(self, X, y):
+        X = np.asarray(X, float); y = np.asarray(y, float)
+        n, k = X.shape
+
+        def loss(theta):
+            w, b = theta[:k], theta[k]
+            z = X @ w + b
+            # log(1 + e^z) - y z, computed stably
+            nll = np.sum(np.logaddexp(0, z) - y * z)
+            p = 1.0 / (1.0 + np.exp(-z))
+            g = p - y
+            return (0.5 * w @ w + self.C * nll,
+                    np.append(w + self.C * (X.T @ g), self.C * g.sum()))
+
+        bounds = [(0, None)] * k + [(None, None)]
+        res = minimize(loss, np.zeros(k + 1), jac=True, method="L-BFGS-B",
+                       bounds=bounds, options={"maxiter": 2000})
+        self.coef_ = res.x[:k][None, :]
+        self.intercept_ = res.x[k:]
+        self.classes_ = np.array([0, 1])
+        return self
+
+    def predict_proba(self, X):
+        z = np.asarray(X, float) @ self.coef_[0] + self.intercept_[0]
+        p = 1.0 / (1.0 + np.exp(-z))
+        return np.column_stack([1 - p, p])
+
+    def predict(self, X):
+        return (self.predict_proba(X)[:, 1] >= 0.5).astype(int)
+
+
 def make_model(kind):
     if kind == "logistic":
         # PM2.5 is heavily skewed, so features are log-transformed first.
         return make_pipeline(SimpleImputer(strategy="median"),
                              FunctionTransformer(log_clip), StandardScaler(),
-                             LogisticRegression(C=1.0, max_iter=2000))
+                             NonNegLogistic(C=1.0))
     return HistGradientBoostingClassifier(
         max_iter=300, learning_rate=0.05, max_leaf_nodes=31,
         min_samples_leaf=20, l2_regularization=1.0, random_state=42)
@@ -322,6 +379,8 @@ def main():
     ap.add_argument("--model", choices=["logistic", "hgb"], default="logistic",
                     help="logistic on pollution features (default) or the "
                          "gradient-boosting model used for the hourly forecast")
+    ap.add_argument("--obs-dir", default=str(OBS_DIR),
+                    help="observation store to read (default %(default)s)")
     ap.add_argument("--tag", default="",
                     help="suffix for the output files, e.g. smoke_2019_20")
     args = ap.parse_args()
@@ -331,7 +390,7 @@ def main():
     rng = np.random.default_rng(args.seed)
 
     print(f"Model: {args.model}\nLoading observations...")
-    daily, sites = load_daily()
+    daily, sites = load_daily(args.obs_dir)
     print(f"  {len(daily):,} station-days, {daily['site_id'].nunique()} stations, "
           f"{daily['day'].min().date()} to {daily['day'].max().date()}")
 

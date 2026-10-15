@@ -1,8 +1,9 @@
 name: Daily forecast
 
-# Rebuilds the training data, runs the data quality tests, fetches recent
-# observations and forecast weather, produces the 24-hour forecast, and
-# commits the three small forecast files so the live dashboard updates.
+# Rebuilds the 2023-2024 data for the data quality tests, restores the
+# 2016-2025 history the daily model trains on, fetches recent observations,
+# produces today's and tomorrow's daily forecast, and commits the three small
+# files the live dashboard reads.
 #
 # Cron times are UTC. 21:00 UTC is 7am in Sydney (8am during daylight saving).
 
@@ -12,7 +13,13 @@ on:
   workflow_dispatch: # "Run workflow" button, for demonstrations
   push:
     branches: [main]
-    paths: [".github/workflows/pipeline.yml", "src/**", "tests/**", "requirements.txt"]
+    paths:
+      [
+        ".github/workflows/pipeline.yml",
+        "src/**",
+        "tests/**",
+        "requirements.txt",
+      ]
 
 permissions:
   contents: write # needed to commit the forecast files back
@@ -57,6 +64,14 @@ jobs:
           find data/processed/observations -maxdepth 1 -type d -name 'year=*' \
             ! -name 'year=2023' ! -name 'year=2024' -exec rm -rf {} +
 
+      - name: Restore 2016-2025 history for the daily model
+        run: |
+          mkdir -p data/processed/history
+          curl -sSL -o hist.zip \
+            https://github.com/ahriyad1/airequity-nsw/releases/download/v0.2-data/observations.zip
+          unzip -q hist.zip -d data/processed/history
+          rm hist.zip
+
       - name: Fetch station registry
         run: python src/ingest/fetch_observations.py --list-sites
 
@@ -87,15 +102,15 @@ jobs:
         run: python src/ingest/fetch_weather_openMeteo.py --past-days 3
 
       # ---- 4. Forecast and publish ---------------------------------------------
-      - name: Produce forecast
-        run: python src/models/predict_today.py
+      - name: Produce daily forecast
+        run: python src/models/predict_daily.py
 
       - name: Commit forecast files
         run: |
           git config user.name  "airequity-bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -f data/processed/latest_forecast.parquet \
-                     data/processed/latest_forecast_meta.json \
+          git add -f data/processed/latest_daily_forecast.parquet \
+                     data/processed/latest_daily_forecast_meta.json \
                      data/processed/latest_observations.parquet
           if git diff --cached --quiet; then
             echo "Forecast unchanged, nothing to commit."
@@ -111,6 +126,6 @@ jobs:
         with:
           name: forecast-${{ github.run_number }}
           path: |
-            data/processed/latest_forecast.parquet
-            data/processed/latest_forecast_meta.json
+            data/processed/latest_daily_forecast.parquet
+            data/processed/latest_daily_forecast_meta.json
           retention-days: 14

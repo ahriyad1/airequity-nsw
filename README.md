@@ -15,8 +15,9 @@ Sydney has 18 operational PM2.5 monitoring stations for about 4.9 million
 people. Half of residents live more than 5 km from the nearest one, so during
 smoke events or pollution build-ups most people have no local reading to act on.
 
-AirEquity forecasts **the chance that PM2.5 will go over 25 µg/m³ in the next
-24 hours** at each station, with and without that station's own sensor. The
+AirEquity forecasts **the chance that a station's daily-average PM2.5 goes over
+25 µg/m³** (the national 24-hour standard), today and tomorrow, with and
+without that station's own sensor. The
 gap between the two tells us how much less reliable a forecast is for a place
 with no monitor, which is the situation most residents are in.
 
@@ -28,23 +29,35 @@ The system is decision support only. It does not replace official NSW health adv
 
 ## Current status (October 2026)
 
-| Component                                          | Status                                    |
-| -------------------------------------------------- | ----------------------------------------- |
-| Data ingestion (NSW Air Quality API, Open-Meteo)   | Running daily                             |
-| Storage (Parquet, DuckDB)                          | Done                                      |
-| Temporal and spatial features                      | Done                                      |
-| Forecast model and daily batch forecast            | Running daily, under revision (see below) |
-| Dashboard                                          | Live at the link above                    |
-| Automation (GitHub Actions) and data quality tests | Running daily                             |
-| Coverage and equity analysis (ABS SEIFA)           | Done                                      |
+| Component                                          | Status                 |
+| -------------------------------------------------- | ---------------------- |
+| Data ingestion (NSW Air Quality API, Open-Meteo)   | Running daily          |
+| Storage (Parquet, DuckDB)                          | Done                   |
+| Temporal and spatial features                      | Done                   |
+| Daily forecast model and batch forecast            | Running daily          |
+| Dashboard                                          | Live at the link above |
+| Automation (GitHub Actions) and data quality tests | Running daily          |
+| Coverage and equity analysis (ABS SEIFA)           | Done                   |
 
-**Known limitation.** The A2 validation held out one station at a time but
-trained on the other stations over the same days it tested on. A stricter
-check that also separates time (`src/analysis/leakage_check.py`) shows the
-hourly model has little real skill on unseen days: mean recall drops from
-about 13% to 3%, below simple persistence (about 10%). The A2 headline figures
-are therefore optimistic. For A4 we are testing a daily-average target and
-training on more years (2016–2025) to see whether skill can be recovered.
+**How well it works.** Each station is held out in turn and each test period
+is unseen in training (`src/analysis/daily_target.py`, results in `results/`).
+
+| Test period (bad station-days)                               | Model | "Newest day repeats" |
+| ------------------------------------------------------------ | ----- | -------------------- |
+| 2019–20 smoke (494), readings on time                        | 59%   | 44%                  |
+| 2019–20 smoke, readings 1 day late (as for today's forecast) | 35%   | 29%                  |
+| 2021–23 (103), readings on time                              | 53%   | 34%                  |
+| 2021–23, readings 1 day late                                 | 17%   | 16%                  |
+| 2024–25 (21), readings on time                               | 3/21  | 1/21                 |
+
+The model helps most during smoke that builds over several days; it cannot see
+sudden one-day spikes coming. Readings reach us about 40 hours late, which costs
+more skill than anything in the model. Forecasting from neighbours only is
+nearly as good as with the station's own sensor (56% vs 59% of smoke-year bad
+days), because smoke covers the whole basin.
+
+An earlier hourly model looked accurate in A2 only because its test shared days
+with its training; on unseen days it caught 3% of bad hours and was replaced.
 Details are in `docs/CHANGELOG.md`.
 
 ---
@@ -114,11 +127,14 @@ python src/features/spatial_features.py
 # 3. Data quality tests
 python -m pytest tests/ -v
 
-# 4. Recent data and tomorrow's forecast
+# 4. 2016-2025 history for the daily model, recent data, and the forecast
+mkdir -p data/processed/history
+curl -sSL -o hist.zip https://github.com/ahriyad1/airequity-nsw/releases/download/v0.2-data/observations.zip
+unzip -q hist.zip -d data/processed/history && rm hist.zip
 python src/ingest/fetch_observations.py --start 2026-10-01 --end 2026-10-12 --parameters PM2.5 TEMP HUMID WSP WDR
 python src/storage/write_parquet.py
 python src/ingest/fetch_weather_openMeteo.py --past-days 3
-python src/models/predict_today.py
+python src/models/predict_daily.py
 
 # 5. Dashboard
 streamlit run src/dashboard/app.py
@@ -132,7 +148,9 @@ python src/models/bootstrap_ci.py         # confidence intervals for the sensor 
 python src/analysis/leakage_check.py      # same-period vs earlier-period training
 python src/analysis/data_delay.py         # effect of late-arriving observations
 python src/analysis/coverage_equity.py    # distance to nearest station vs SEIFA
-python src/analysis/daily_target.py       # daily-average target, time + station held out
+python src/analysis/daily_target.py --obs-dir data/processed/history/observations \
+    --train-years 2016-2018,2021-2023 --test-years 2019-2020 --tag logistic_smoke_2019_20
+                                          # daily model, time + station held out
 ```
 
 ---
@@ -140,10 +158,11 @@ python src/analysis/daily_target.py       # daily-average target, time + station
 ## Automation
 
 `.github/workflows/pipeline.yml` runs every day at 21:00 UTC (7–8am Sydney) and
-whenever code in `src/` or `tests/` changes. It rebuilds the training data,
-runs the data quality tests (the forecast stops if any fail), fetches the last
-ten days of observations and the weather forecast, produces the next 24 hours of
-forecasts, and commits three small files that the live dashboard reads.
+whenever code in `src/` or `tests/` changes. It rebuilds the 2023–2024 data and
+runs the data quality tests (the forecast stops if any fail), restores the
+2016–2025 history, fetches the last ten days of observations, produces today's
+and tomorrow's daily forecast, and commits three small files that the live
+dashboard reads.
 
 ---
 
@@ -151,15 +170,19 @@ forecasts, and commits three small files that the live dashboard reads.
 
 1. **Baselines first.** Persistence (tomorrow looks like today) and predicting
    no exceedance. A model that cannot beat them is reported as such.
-2. **Threshold target.** The label is PM2.5 above 25 µg/m³, not a concentration.
-3. **Spatial features.** Inverse-distance and nearest-neighbour readings,
-   upwind stations and network summaries, always excluding the station itself.
-   These are what make a forecast possible where there is no sensor.
-4. **Cost-weighted decisions.** A missed advisory is treated as 10 times worse
+2. **Threshold target.** The label is a station's daily-average PM2.5 above
+   25 µg/m³ (the national 24-hour standard), not a concentration.
+3. **Neighbour features.** Distance-weighted and nearest-station daily means,
+   and network summaries, always excluding the station itself. These are what
+   make a forecast possible where there is no sensor.
+4. **Simple, constrained model.** Logistic regression on log-transformed
+   pollution features, with weights that cannot be negative, so more pollution
+   never lowers the forecast chance.
+5. **Cost-weighted decisions.** A missed advisory is treated as 10 times worse
    than a false alarm, and alarm thresholds are set accordingly.
-5. **Validation.** Each station is held out in turn and forecast from the
-   others. From A4, the test years are also held out from training.
-6. **Equity.** Distance to the nearest station is compared with ABS SEIFA
+6. **Validation.** Each station is held out in turn and forecast from the
+   others, and the test years are held out from training.
+7. **Equity.** Distance to the nearest station is compared with ABS SEIFA
    disadvantage for 331 Sydney SA2 areas.
 
 Metrics: recall, precision, average precision and cost per station-hour or

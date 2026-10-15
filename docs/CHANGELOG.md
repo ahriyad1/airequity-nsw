@@ -12,6 +12,102 @@ evidence is. Commit references are short hashes in the project repository.
 
 ---
 
+## Daily forecast (towards Assessment 4)
+
+### 2016–2025 history added
+
+**Previous state.** Training and validation used 2023–2024 only. On the daily
+definition (a station's daily-average PM2.5 over 25 µg/m³) those two years hold
+59 bad station-days, most from one week in September 2023, too few to learn or
+test anything.
+
+**Current state.** `.github/workflows/fetch_history.yml` fetched PM2.5 and
+weather for 2016–2022 and 2025 from the NSW Air Quality API and published
+2016–2025 as release `v0.2-data`. Training years 2016–2023 now hold 697 bad
+station-days on 132 dates, including 494 in the 2019–20 bushfire smoke.
+
+**Evidence.** Release `v0.2-data` notes (bad days per year).
+
+### Daily-average target replaces the hourly target
+
+**Previous state.** The hourly model predicted single hours over 25 µg/m³ a day
+ahead. On unseen days it caught 3% of bad hours, below persistence (10%).
+
+**Current state.** `src/analysis/daily_target.py` predicts whether a station's
+daily average goes over 25 µg/m³, which is what the national standard measures.
+Validation holds out each station in turn and also holds out the test years,
+so training and test share neither days nor stations. Three test periods:
+2019–20 (smoke), 2021–23, 2024–25.
+
+### Gradient boosting replaced by a constrained logistic model
+
+**Finding.** Under the new validation the gradient-boosting model caught 6% of
+the 2019–20 smoke-year bad days, against 44% for persistence. In a diagnostic
+run its median probability on polluted days was about 0.20 in the training
+years but 0.03 in 2019–20, despite higher pollution. It had learned from weather and calendar
+that summer pollution usually clears by the next day, which held for one-off
+spikes in the training years but not for the bushfire smoke.
+
+**Current state.** Logistic regression on log-transformed pollution features
+only (the station's own recent daily means, and distance-weighted readings from
+other stations). Two further corrections came from testing the live forecast on
+December 2019:
+
+- _Weights cannot be negative._ Unconstrained, the overlapping own-sensor
+  averages took weights of opposite sign. At 250 µg/m³ Oakdale was given a 3%
+  chance. Bounding the weights at zero means more pollution never lowers the
+  chance.
+- _Gaps filled from available days._ Oakdale's sensor was offline for four
+  days before that reading, and the missing days were filled with a typical
+  clean-air value. Missing earlier days now take the newest available day.
+  After both fixes Oakdale's chance is 96%.
+
+All validation results were re-run after each change.
+
+**Results** (share of bad station-days caught; each test period unseen):
+
+| Test period         | Readings    | Model, own sensor | Model, neighbours only | Persistence |
+| ------------------- | ----------- | ----------------- | ---------------------- | ----------- |
+| 2019–20 smoke (494) | on time     | 59%               | 56%                    | 44%         |
+| 2019–20 smoke       | 1 day late  | 35%               | 34%                    | 29%         |
+| 2019–20 smoke       | 2 days late | 36%               | 33%                    | 30%         |
+| 2021–23 (103)       | on time     | 53%               | 55%                    | 34%         |
+| 2021–23             | 1 day late  | 17%               | 17%                    | 16%         |
+| 2024–25 (21)        | on time     | 14%               | 0%                     | 5%          |
+
+In 2019–20 the own-sensor model has lower cost than persistence at every
+reading age (95% intervals exclude zero; better at 14–15 of 17 stations). In
+2021–23 it is better with on-time readings but the interval includes zero, and
+with late readings it is worse because of extra false alarms. In 2024–25, 20 of
+the 21 bad days were sudden spikes not preceded by a bad day, and nothing beats
+predicting no exceedance.
+
+**Sensor gap.** Without the station's own sensor the model catches 56% of
+2019–20 bad days against 59% with it; in 2021–23 there is no difference. For
+daily smoke advisories, neighbouring stations carry most of the information.
+
+**Evidence.** `results/daily_target_*` (summary, per-station folds, bootstrap
+intervals and sign tests); gradient-boosting comparison in
+`results/daily_target_hgb_*`.
+
+### Live forecast switched to the daily model
+
+**Current state.** `src/models/predict_daily.py` trains on 2016–2025 each run
+and forecasts today and tomorrow for every station, with and without its own
+sensor. Readings arrive about 40 hours late, so the newest complete day is
+usually two days before today; each forecast is trained with exactly that delay.
+Advisory threshold 1/11 (9.1%) from the 10:1 cost ratio. The daily workflow
+restores `v0.2-data` and runs this script; `predict_today.py` (hourly) is no
+longer run.
+
+The dashboard's Forecast and Station tabs show today and tomorrow; the Method
+tab reads the validation tables from `results/`. New tests in
+`tests/test_daily_forecast.py` check that features use only earlier days,
+neighbour summaries exclude the station, gaps are filled, more pollution never
+lowers the chance, and the published file is well formed.
+
+---
+
 ## Forecasting
 
 ### Batch forecasting added
