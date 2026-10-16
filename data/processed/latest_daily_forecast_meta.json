@@ -1,5 +1,5 @@
 {
-  "issued_at": "2026-10-17T02:09:00",
+  "issued_at": "2026-10-17T10:20:00",
   "timezone": "Australia/Sydney",
   "observations_up_to": "2026-10-16T23:00:00",
   "base_day": "2026-10-16",
@@ -239,5 +239,5 @@
       }
     }
   ],
-  "generated": "2026-10-16T15:09:30+00:00"
+  "generated": "2026-10-16T23:20:44+00:00"
 }
