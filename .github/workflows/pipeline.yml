@@ -1,12 +1,5 @@
 name: Daily forecast
 
-# Rebuilds the 2023-2024 data for the data quality tests, restores the
-# 2016-2025 history the daily model trains on, fetches recent observations,
-# produces today's and tomorrow's daily forecast, and commits the three small
-# files the live dashboard reads.
-#
-# Cron times are UTC. 21:00 UTC is 7am in Sydney (8am during daylight saving).
-
 on:
   schedule:
     - cron: "0 21 * * *"
@@ -90,8 +83,11 @@ jobs:
       # be replaced with just the recent window the forecast needs.
       - name: Fetch recent observations
         run: |
-          START=$(date -u -d '11 days ago' +%F)
-          END=$(date -u -d '1 day ago' +%F)
+          # The API treats the end date as exclusive and its dates are Sydney
+          # time, so ending at today's Sydney date fetches all of yesterday.
+          # (Ending at "1 day ago" in UTC lost a whole day.)
+          START=$(TZ=Australia/Sydney date -d '11 days ago' +%F)
+          END=$(TZ=Australia/Sydney date +%F)
           python src/ingest/fetch_observations.py --start "$START" --end "$END" \
             --parameters PM2.5 TEMP HUMID WSP WDR
 
