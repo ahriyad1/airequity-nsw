@@ -90,6 +90,44 @@ daily smoke advisories, neighbouring stations carry most of the information.
 intervals and sign tests); gradient-boosting comparison in
 `results/daily_target_hgb_*`.
 
+### Day-ahead weather forecasts tested, not adopted
+
+**Question.** Would tomorrow's weather forecast improve the daily advisory?
+
+**Data.** Archived day-ahead forecasts (Open-Meteo Previous Runs API, JMA GSM
+model, 24-hour lead) for all 24 Sydney stations, 2018–2025, fetched by
+`.github/workflows/fetch_weather_history.yml` and published as release
+`v0.3-weather`. They are genuine forecasts, not observed weather: daily
+temperature correlates 0.96 with station readings, daily wind speed 0.55.
+
+**Test.** `src/analysis/daily_target.py --weather ... --model logistic_wx` adds
+daily summaries of the forecast for the target day (mean and maximum wind,
+wind components, rain, humidity, maximum temperature, pressure, cloud) to the
+pollution features. Weather weights may take either sign. The model without
+weather is re-run on exactly the same days (2018 onward) for a fair comparison.
+
+**Result.** Weather made the forecast worse. Bad days caught with on-time
+readings, without vs with weather:
+
+| Test period         | Without weather | With weather | Persistence |
+| ------------------- | --------------- | ------------ | ----------- |
+| 2019–20 smoke (494) | 277             | 198          | 218         |
+| 2021–23 (103)       | 55              | 49           | 35          |
+| 2024–25 (21)        | 3               | 8            | 1           |
+
+Cost was higher with weather in 2019–20 and 2021–23 at every reading age
+(95% intervals exclude zero; worse at 10–18 stations). 2024–25 with on-time
+readings is the only improvement, on 21 bad days, and it reverses with late
+readings.
+
+**Why.** In the training years, hot, dry, windy days were mostly clean days,
+because wind disperses pollution. In bushfire seasons the same weather brings
+smoke. With 142 bad training days since 2018, the model learns the normal-year
+relationship, which is wrong when advisories matter most. The live model stays
+pollution-only.
+
+**Evidence.** `results/daily_target_wxcmp_*`.
+
 ### Live forecast switched to the daily model
 
 **Current state.** `src/models/predict_daily.py` trains on 2016–2025 each run

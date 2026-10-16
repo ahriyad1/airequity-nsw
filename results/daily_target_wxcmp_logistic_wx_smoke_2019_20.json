@@ -1,0 +1,70 @@
+{
+  "generated": "2026-10-17T01:56:05",
+  "train_years": [
+    2018,
+    2021,
+    2022,
+    2023
+  ],
+  "test_years": [
+    2019,
+    2020
+  ],
+  "delays": [
+    0,
+    1,
+    2
+  ],
+  "threshold": 25.0,
+  "min_valid_hours": 18,
+  "cost_ratio": 10.0,
+  "decision_threshold": 0.09090909090909091,
+  "validation": "hold out each station AND the test years; train on other stations in the training years only",
+  "model": "logistic_wx",
+  "features": {
+    "with_sensor": [
+      "pm_mean",
+      "pm_max",
+      "pm_min",
+      "pm_eve",
+      "pm_mean_lag1",
+      "pm_mean_lag2",
+      "pm_mean_3d",
+      "net_mean",
+      "net_max",
+      "net_n_over",
+      "net_idw",
+      "net_nearest",
+      "net_mean_lag1",
+      "net_idw_lag1",
+      "fx_wsp_mean",
+      "fx_wsp_max",
+      "fx_precip",
+      "fx_rh_mean",
+      "fx_temp_max",
+      "fx_pres_mean",
+      "fx_cloud_mean",
+      "fx_u",
+      "fx_v"
+    ],
+    "without_sensor": [
+      "net_mean",
+      "net_max",
+      "net_n_over",
+      "net_idw",
+      "net_nearest",
+      "net_mean_lag1",
+      "net_idw_lag1",
+      "fx_wsp_mean",
+      "fx_wsp_max",
+      "fx_precip",
+      "fx_rh_mean",
+      "fx_temp_max",
+      "fx_pres_mean",
+      "fx_cloud_mean",
+      "fx_u",
+      "fx_v"
+    ]
+  },
+  "n_bootstrap": 2000
+}

@@ -185,6 +185,37 @@ def add_calendar(t):
     return t
 
 
+# Day-ahead weather forecast for the target day T (Open-Meteo Previous Runs,
+# 24-hour lead), summarised per day. See src/ingest/fetch_weather_history.py.
+WX_COLS = ["fx_wsp_mean", "fx_wsp_max", "fx_precip", "fx_rh_mean", "fx_temp_max",
+           "fx_pres_mean", "fx_cloud_mean", "fx_u", "fx_v"]
+
+
+def load_weather(path):
+    """Hourly archived forecasts -> one row per (station, day)."""
+    w = pd.read_parquet(path)
+    w["day"] = pd.to_datetime(w["time"]).dt.floor("D").astype("datetime64[ns]")
+    rad = np.deg2rad(w["wind_direction_10m"])
+    w["u"] = -w["wind_speed_10m"] * np.sin(rad)
+    w["v"] = -w["wind_speed_10m"] * np.cos(rad)
+    g = w.groupby(["site_id", "day"])
+    out = pd.DataFrame({
+        "fx_wsp_mean": g["wind_speed_10m"].mean(),
+        "fx_wsp_max": g["wind_speed_10m"].max(),
+        "fx_precip": g["precipitation"].sum(min_count=1),
+        "fx_rh_mean": g["relative_humidity_2m"].mean(),
+        "fx_temp_max": g["temperature_2m"].max(),
+        "fx_pres_mean": g["surface_pressure"].mean(),
+        "fx_cloud_mean": g["cloud_cover"].mean(),
+        "fx_u": g["u"].mean(),
+        "fx_v": g["v"].mean(),
+        "fx_hours": g["wind_speed_10m"].count(),
+    }).reset_index()
+    # a day needs most of its hours to count
+    out.loc[out["fx_hours"] < 18, WX_COLS] = np.nan
+    return out.drop(columns="fx_hours")
+
+
 def feature_sets(w_cols):
     own = OWN_COLS + ["pm_mean_lag1", "pm_mean_lag2", "pm_mean_3d"]
     net = NET_COLS + ["net_mean_lag1", "net_idw_lag1"]
@@ -196,13 +227,19 @@ def feature_sets(w_cols):
     pm_own = [c for c in own if c != "pm_std"]
     return {
         "logistic": {"with_sensor": pm_own + net, "without_sensor": net},
+        # same, plus the day-ahead weather forecast for T (kept last: these
+        # weights may take either sign)
+        "logistic_wx": {"with_sensor": pm_own + net + WX_COLS,
+                        "without_sensor": net + WX_COLS},
         "hgb": {"with_sensor": own + net + w_cols + cal,
                 "without_sensor": net + w_cols + cal},
     }
 
 
-def build_table(daily, sites, delay):
-    # One row per (station, target day T) with features from base day B
+def build_table(daily, sites, delay, weather=None):
+    # One row per (station, target day T) with features from base day B.
+    # With `weather`, only days that have a weather forecast are kept, for
+    # every model, so models with and without weather see the same rows.
     feat, d, w_cols = daily_features(daily, sites)
 
     # target day T = base day + 1 + delay, same station
@@ -211,6 +248,9 @@ def build_table(daily, sites, delay):
     tgt = d[["site_id", "day", "pm_mean"]].rename(columns={"pm_mean": "target"})
     t = feat.merge(tgt, on=["site_id", "day"], how="inner").dropna(subset=["target"])
     t["y"] = (t["target"] > THRESHOLD).astype(int)
+    if weather is not None:
+        t = t.merge(weather, on=["site_id", "day"], how="inner")
+        t = t.dropna(subset=WX_COLS, how="any")
     return add_calendar(t), feature_sets(w_cols)
 
 
@@ -220,10 +260,19 @@ def log_clip(X):
     return np.log1p(np.clip(X, 0, None))
 
 
+def log_clip_first(X, n_free=0):
+    """Log-transform the pollution columns; leave the last n_free as they are."""
+    X = np.array(X, dtype=float)
+    k = X.shape[1] - n_free
+    X[:, :k] = np.log1p(np.clip(X[:, :k], 0, None))
+    return X
+
+
 class NonNegLogistic(BaseEstimator, ClassifierMixin):
 
-    def __init__(self, C=1.0):
+    def __init__(self, C=1.0, n_free=0):
         self.C = C
+        self.n_free = n_free   # last n_free weights may be negative (weather)
 
     def fit(self, X, y):
         X = np.asarray(X, float); y = np.asarray(y, float)
@@ -239,7 +288,8 @@ class NonNegLogistic(BaseEstimator, ClassifierMixin):
             return (0.5 * w @ w + self.C * nll,
                     np.append(w + self.C * (X.T @ g), self.C * g.sum()))
 
-        bounds = [(0, None)] * k + [(None, None)]
+        bounds = ([(0, None)] * (k - self.n_free) + [(None, None)] * self.n_free
+                  + [(None, None)])
         res = minimize(loss, np.zeros(k + 1), jac=True, method="L-BFGS-B",
                        bounds=bounds, options={"maxiter": 2000})
         self.coef_ = res.x[:k][None, :]
@@ -257,6 +307,11 @@ class NonNegLogistic(BaseEstimator, ClassifierMixin):
 
 
 def make_model(kind):
+    if kind == "logistic_wx":
+        n = len(WX_COLS)
+        return make_pipeline(SimpleImputer(strategy="median"),
+                             FunctionTransformer(log_clip_first, kw_args={"n_free": n}),
+                             StandardScaler(), NonNegLogistic(C=1.0, n_free=n))
     if kind == "logistic":
         # PM2.5 is heavily skewed, so features are log-transformed first.
         return make_pipeline(SimpleImputer(strategy="median"),
@@ -376,7 +431,10 @@ def main():
     ap.add_argument("--delays", nargs="+", type=int, default=[0])
     ap.add_argument("--n-boot", type=int, default=2000)
     ap.add_argument("--seed", type=int, default=42)
-    ap.add_argument("--model", choices=["logistic", "hgb"], default="logistic",
+    ap.add_argument("--weather", default=None,
+                    help="archived weather forecasts (weather_history.parquet); "
+                         "restricts every model to days that have one")
+    ap.add_argument("--model", choices=["logistic", "logistic_wx", "hgb"], default="logistic",
                     help="logistic on pollution features (default) or the "
                          "gradient-boosting model used for the hourly forecast")
     ap.add_argument("--obs-dir", default=str(OBS_DIR),
@@ -391,12 +449,15 @@ def main():
 
     print(f"Model: {args.model}\nLoading observations...")
     daily, sites = load_daily(args.obs_dir)
+    weather = load_weather(args.weather) if args.weather else None
+    if args.model == "logistic_wx" and weather is None:
+        ap.error("--model logistic_wx needs --weather")
     print(f"  {len(daily):,} station-days, {daily['site_id'].nunique()} stations, "
           f"{daily['day'].min().date()} to {daily['day'].max().date()}")
 
     all_folds, all_summ, all_ci = [], [], []
     for delay in args.delays:
-        table, fsets = build_table(daily, sites, delay)
+        table, fsets = build_table(daily, sites, delay, weather)
         tr = table[table["year"].isin(train_years)]
         te = table[table["year"].isin(test_years)]
         print(f"\n=== delay {delay} day(s): features from day T-{1 + delay} ===")
