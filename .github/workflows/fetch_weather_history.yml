@@ -1,0 +1,63 @@
+name: Fetch weather forecast history (one-off)
+
+on:
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "First date"
+        default: "2018-01-01"
+        required: true
+      end:
+        description: "Last date"
+        default: "2025-12-31"
+        required: true
+      model:
+        description: "Open-Meteo model"
+        default: "jma_gsm"
+        required: true
+
+permissions:
+  contents: write # needed to create the data release
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install requests pandas pyarrow
+
+      - name: Fetch station registry
+        run: python src/ingest/fetch_observations.py --list-sites
+
+      - name: Fetch archived forecasts
+        run: |
+          set -o pipefail
+          python src/ingest/fetch_weather_history.py \
+            --start "${{ inputs.start }}" --end "${{ inputs.end }}" --model "${{ inputs.model }}" \
+            | tee fetch.log
+          {
+            echo '```'
+            sed -n '/Share of hours present/,$p' fetch.log
+            echo '```'
+          } > summary.md
+          cat summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish v0.3-weather release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view v0.3-weather >/dev/null 2>&1; then
+            gh release upload v0.3-weather data/processed/weather_history.parquet --clobber
+          else
+            gh release create v0.3-weather data/processed/weather_history.parquet \
+              --title "Archived day-ahead weather forecasts (${{ inputs.model }})" \
+              --notes-file summary.md
+          fi
