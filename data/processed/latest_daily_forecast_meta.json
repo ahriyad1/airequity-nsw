@@ -1,8 +1,8 @@
 {
-  "issued_at": "2026-10-17T01:22:00",
+  "issued_at": "2026-10-17T01:44:00",
   "timezone": "Australia/Sydney",
-  "observations_up_to": "2026-10-14T23:00:00",
-  "base_day": "2026-10-14",
+  "observations_up_to": "2026-10-16T23:00:00",
+  "base_day": "2026-10-16",
   "pm25_threshold_ug_m3": 25.0,
   "min_valid_hours": 18,
   "decision_threshold": 0.0909,
@@ -17,111 +17,111 @@
     {
       "horizon": "today",
       "target_day": "2026-10-17",
-      "delay_days": 2,
-      "inputs_age_days": 3,
+      "delay_days": 0,
+      "inputs_age_days": 1,
       "stations_on_advisory_with_sensor": 0,
       "stations_on_advisory_without_sensor": 0,
       "validation": {
         "2019-20 smoke": {
           "with_sensor": {
-            "recall": 0.3583,
-            "precision": 0.3899,
-            "cost": 0.3409,
+            "recall": 0.587,
+            "precision": 0.4538,
+            "cost": 0.2363,
             "events": 494.0,
-            "caught": 177.0,
-            "false_alarms": 277.0
+            "caught": 290.0,
+            "false_alarms": 349.0
           },
           "without_sensor": {
-            "recall": 0.332,
-            "precision": 0.3534,
-            "cost": 0.3561,
+            "recall": 0.5587,
+            "precision": 0.4188,
+            "cost": 0.2535,
             "events": 494.0,
-            "caught": 164.0,
-            "false_alarms": 300.0
+            "caught": 276.0,
+            "false_alarms": 383.0
           },
           "persistence": {
-            "recall": 0.2976,
-            "precision": 0.3155,
-            "cost": 0.3748,
+            "recall": 0.4413,
+            "precision": 0.4619,
+            "cost": 0.2981,
             "events": 494.0,
-            "caught": 147.0,
-            "false_alarms": 319.0
+            "caught": 218.0,
+            "false_alarms": 254.0
           },
           "network_persistence": {
-            "recall": 0.33,
-            "precision": 0.3361,
-            "cost": 0.3592,
+            "recall": 0.4494,
+            "precision": 0.4635,
+            "cost": 0.2945,
             "events": 494.0,
-            "caught": 163.0,
-            "false_alarms": 322.0
+            "caught": 222.0,
+            "false_alarms": 257.0
           }
         },
         "2021-23": {
           "with_sensor": {
-            "recall": 0.0777,
-            "precision": 0.0381,
-            "cost": 0.0642,
+            "recall": 0.534,
+            "precision": 0.2075,
+            "cost": 0.0384,
             "events": 103.0,
-            "caught": 8.0,
-            "false_alarms": 202.0
+            "caught": 55.0,
+            "false_alarms": 210.0
           },
           "without_sensor": {
-            "recall": 0.1359,
-            "precision": 0.0657,
-            "cost": 0.0606,
+            "recall": 0.5534,
+            "precision": 0.2088,
+            "cost": 0.0376,
             "events": 103.0,
-            "caught": 14.0,
-            "false_alarms": 199.0
+            "caught": 57.0,
+            "false_alarms": 216.0
           },
           "persistence": {
-            "recall": 0.0971,
-            "precision": 0.1042,
-            "cost": 0.0566,
+            "recall": 0.3398,
+            "precision": 0.3431,
+            "cost": 0.0416,
             "events": 103.0,
-            "caught": 10.0,
-            "false_alarms": 86.0
+            "caught": 35.0,
+            "false_alarms": 67.0
           },
           "network_persistence": {
-            "recall": 0.1068,
-            "precision": 0.1048,
-            "cost": 0.0565,
+            "recall": 0.3883,
+            "precision": 0.339,
+            "cost": 0.0394,
             "events": 103.0,
-            "caught": 11.0,
-            "false_alarms": 94.0
+            "caught": 40.0,
+            "false_alarms": 78.0
           }
         },
         "2024-25": {
           "with_sensor": {
-            "recall": 0.0476,
-            "precision": 0.1,
-            "cost": 0.0171,
+            "recall": 0.1429,
+            "precision": 0.0732,
+            "cost": 0.0178,
             "events": 21.0,
-            "caught": 1.0,
-            "false_alarms": 9.0
+            "caught": 3.0,
+            "false_alarms": 38.0
           },
           "without_sensor": {
-            "recall": 0.0476,
-            "precision": 0.1111,
-            "cost": 0.017,
+            "recall": 0.0,
+            "precision": 0.0,
+            "cost": 0.021,
             "events": 21.0,
-            "caught": 1.0,
-            "false_alarms": 8.0
+            "caught": 0.0,
+            "false_alarms": 47.0
           },
           "persistence": {
             "recall": 0.0476,
-            "precision": 0.0556,
-            "cost": 0.0177,
+            "precision": 0.05,
+            "cost": 0.0179,
             "events": 21.0,
             "caught": 1.0,
-            "false_alarms": 17.0
+            "false_alarms": 19.0
           },
           "network_persistence": {
-            "recall": 0.0476,
-            "precision": 0.125,
-            "cost": 0.0169,
+            "recall": 0.0,
+            "precision": 0.0,
+            "cost": 0.0178,
             "events": 21.0,
-            "caught": 1.0,
-            "false_alarms": 7.0
+            "caught": 0.0,
+            "false_alarms": 8.0
           }
         }
       }
@@ -129,12 +129,115 @@
     {
       "horizon": "tomorrow",
       "target_day": "2026-10-18",
-      "delay_days": 3,
-      "inputs_age_days": 4,
+      "delay_days": 1,
+      "inputs_age_days": 2,
       "stations_on_advisory_with_sensor": 0,
       "stations_on_advisory_without_sensor": 0,
-      "validation": {}
+      "validation": {
+        "2019-20 smoke": {
+          "with_sensor": {
+            "recall": 0.3543,
+            "precision": 0.3028,
+            "cost": 0.3554,
+            "events": 494.0,
+            "caught": 175.0,
+            "false_alarms": 403.0
+          },
+          "without_sensor": {
+            "recall": 0.3421,
+            "precision": 0.309,
+            "cost": 0.3589,
+            "events": 494.0,
+            "caught": 169.0,
+            "false_alarms": 378.0
+          },
+          "persistence": {
+            "recall": 0.2935,
+            "precision": 0.3072,
+            "cost": 0.3775,
+            "events": 494.0,
+            "caught": 145.0,
+            "false_alarms": 327.0
+          },
+          "network_persistence": {
+            "recall": 0.3077,
+            "precision": 0.3108,
+            "cost": 0.3716,
+            "events": 494.0,
+            "caught": 152.0,
+            "false_alarms": 337.0
+          }
+        },
+        "2021-23": {
+          "with_sensor": {
+            "recall": 0.165,
+            "precision": 0.0863,
+            "cost": 0.0579,
+            "events": 103.0,
+            "caught": 17.0,
+            "false_alarms": 180.0
+          },
+          "without_sensor": {
+            "recall": 0.165,
+            "precision": 0.0872,
+            "cost": 0.0578,
+            "events": 103.0,
+            "caught": 17.0,
+            "false_alarms": 178.0
+          },
+          "persistence": {
+            "recall": 0.1553,
+            "precision": 0.16,
+            "cost": 0.0531,
+            "events": 103.0,
+            "caught": 16.0,
+            "false_alarms": 84.0
+          },
+          "network_persistence": {
+            "recall": 0.2136,
+            "precision": 0.1849,
+            "cost": 0.0505,
+            "events": 103.0,
+            "caught": 22.0,
+            "false_alarms": 97.0
+          }
+        },
+        "2024-25": {
+          "with_sensor": {
+            "recall": 0.0,
+            "precision": 0.0,
+            "cost": 0.0181,
+            "events": 21.0,
+            "caught": 0.0,
+            "false_alarms": 11.0
+          },
+          "without_sensor": {
+            "recall": 0.0,
+            "precision": null,
+            "cost": 0.0172,
+            "events": 21.0,
+            "caught": 0.0,
+            "false_alarms": 0.0
+          },
+          "persistence": {
+            "recall": 0.0,
+            "precision": 0.0,
+            "cost": 0.0188,
+            "events": 21.0,
+            "caught": 0.0,
+            "false_alarms": 20.0
+          },
+          "network_persistence": {
+            "recall": 0.0,
+            "precision": 0.0,
+            "cost": 0.0178,
+            "events": 21.0,
+            "caught": 0.0,
+            "false_alarms": 8.0
+          }
+        }
+      }
     }
   ],
-  "generated": "2026-10-16T14:22:15+00:00"
+  "generated": "2026-10-16T14:44:14+00:00"
 }
