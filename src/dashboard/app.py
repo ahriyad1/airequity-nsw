@@ -318,8 +318,14 @@ def load_sites() -> pd.DataFrame:
     return sites.dropna().drop_duplicates("site_id")
 
 
+def file_stamp(*paths) -> tuple:
+    # Changes whenever a file appears or is replaced, so cached loaders
+    # pick up a new forecast at once instead of after their time-out.
+    return tuple(p.stat().st_mtime if p.exists() else None for p in paths)
+
+
 @st.cache_data(ttl=600, show_spinner=False)
-def load_forecast():
+def load_forecast(stamp=None):
     if not FORECAST_PATH.exists():
         return None, {}
     fc = pd.read_parquet(FORECAST_PATH)
@@ -345,7 +351,7 @@ def load_validation() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=600, show_spinner=False)
-def load_recent_readings():
+def load_recent_readings(stamp=None):
     if not RECENT_OBS_PATH.exists():
         return None
     df = pd.read_parquet(RECENT_OBS_PATH).rename(columns={"PM2.5": "value"})
@@ -438,7 +444,7 @@ except Exception as exc:  # noqa: BLE001
     st.error(f"Could not load historical data: {exc}")
     st.stop()
 
-fc, meta = load_forecast()
+fc, meta = load_forecast(file_stamp(FORECAST_PATH, FORECAST_META_PATH))
 
 operational_ids = set(feat["site_id"].unique())
 obs = obs[obs["site_id"].isin(operational_ids)]
@@ -604,8 +610,17 @@ with tab_fc:
                         f'caught {pct(b.get("recall") or 0, 0)}')
                 cards.append(stat(period.replace("-", "–"), pct(m.get("recall") or 0, 0),
                                   note, colour))
-            st.markdown('<div class="stats" style="grid-template-columns:repeat(3,minmax(0,1fr))">'
-                        + "".join(cards) + '</div>', unsafe_allow_html=True)
+            if cards:
+                st.markdown('<div class="stats" style="grid-template-columns:repeat(3,minmax(0,1fr))">'
+                            + "".join(cards) + '</div>', unsafe_allow_html=True)
+            else:
+                st.markdown(
+                    f'<div class="figure"><div class="figure-value" style="color:{MUTED}">'
+                    f'Not tested</div><div class="figure-label">No validation with readings '
+                    f'{hmeta["inputs_age_days"]} days old</div><div class="figure-note">The model '
+                    'was tested with readings up to 3 days old. Today\'s run used older ones, '
+                    'so treat this forecast as a rough guide.</div></div>',
+                    unsafe_allow_html=True)
             st.markdown(
                 '<div class="panel-sub" style="margin-top:.8rem">Useful during smoke that builds '
                 'over several days. It cannot see sudden one-day spikes coming, and most '
@@ -701,7 +716,7 @@ with tab_station:
         with c1:
             with st.container(border=True):
                 panel_head("Last ten days", "Hourly PM2.5 readings, with each day's average.")
-                recent = load_recent_readings()
+                recent = load_recent_readings(file_stamp(RECENT_OBS_PATH))
                 source = recent if recent is not None else obs[["site_name", "timestamp", "value"]]
                 win = source[(source["site_name"] == sel)
                              & (source["timestamp"] > issued - pd.Timedelta(days=10))
