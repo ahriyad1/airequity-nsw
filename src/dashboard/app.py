@@ -377,6 +377,10 @@ def day_hour(ts) -> str:
     return f"{ts.day} {ts.strftime('%b')}, {hour_label(ts)}"
 
 
+def days(n) -> str:
+    return f"{n} day" if n == 1 else f"{n} days"
+
+
 def day_label(d) -> str:
     d = pd.Timestamp(d)
     return f"{d.strftime('%a')} {d.day} {d.strftime('%b')}"
@@ -545,7 +549,7 @@ with tab_fc:
                    view.lower(), VIOLET)
             + stat("Advisory level", pct(thr), "lowest cost in testing", AMBER)
             + stat("Newest full day", day_label(base_day),
-                   f"{hmeta['inputs_age_days']} days before {target_txt}", TEAL)
+                   f"{days(hmeta['inputs_age_days'])} before {target_txt}", TEAL)
             + '</div></div>',
             unsafe_allow_html=True)
 
@@ -596,7 +600,7 @@ with tab_fc:
             v = hmeta.get("validation", {})
             panel_head("How much to trust this forecast",
                        f"Share of bad days caught in years the model never saw, using readings "
-                       f"{hmeta['inputs_age_days']} days old as here, compared with assuming "
+                       f"{days(hmeta['inputs_age_days'])} old as here, compared with assuming "
                        "the newest full day repeats.")
             cards = []
             for period, colour in [("2019-20 smoke", ORANGE), ("2021-23", ACCENT), ("2024-25", TEAL)]:
@@ -617,7 +621,7 @@ with tab_fc:
                 st.markdown(
                     f'<div class="figure"><div class="figure-value" style="color:{MUTED}">'
                     f'Not tested</div><div class="figure-label">No validation with readings '
-                    f'{hmeta["inputs_age_days"]} days old</div><div class="figure-note">The model '
+                    f'{days(hmeta["inputs_age_days"])} old</div><div class="figure-note">The model '
                     'was tested with readings up to 3 days old. Today\'s run used older ones, '
                     'so treat this forecast as a rough guide.</div></div>',
                     unsafe_allow_html=True)
@@ -919,8 +923,8 @@ with tab_method:
         unsafe_allow_html=True)
 
     steps = [
-        ("Fetch", "Hourly PM2.5 from the NSW Air Quality API, every morning. Readings arrive "
-                  "about 40 hours late."),
+        ("Fetch", "Hourly PM2.5 from the NSW Air Quality API, every morning. The newest "
+                  "complete day is usually yesterday, sometimes older."),
         ("Summarise", "Daily averages for each station and its neighbours, weighted by distance."),
         ("Estimate chance", "Logistic regression trained on 2016–2025: one model with the "
                             "station's own sensor, one from neighbours only."),
@@ -946,9 +950,11 @@ with tab_method:
                 st.markdown('<div class="panel-sub">Validation results are not in this '
                             'deployment.</div>', unsafe_allow_html=True)
             else:
-                ages = {"On-time readings": 0, "1 day late (today)": 1, "2 days late (tomorrow)": 2}
-                age = st.segmented_control("Readings", list(ages), default="1 day late (today)",
-                                           label_visibility="collapsed") or "1 day late (today)"
+                ages = {"Readings 1 day old": 0, "2 days old": 1, "3 days old": 2}
+                live = fc_meta("today").get("delay_days") if has_fc else None
+                default = next((k for k, v in ages.items() if v == live), "Readings 1 day old")
+                age = st.segmented_control("Readings", list(ages), default=default,
+                                           label_visibility="collapsed") or default
                 d = ages[age]
                 periods = ["2019-20 smoke", "2021-23", "2024-25"]
                 labels = {"with_sensor": "With own sensor", "without_sensor": "Without own sensor",
@@ -978,8 +984,8 @@ with tab_method:
             st.markdown(
                 '<div class="panel-sub" style="margin-top:.8rem">In the 2019–20 smoke the model '
                 'catches more bad days than "newest day repeats" at every reading age, and the '
-                'difference holds up statistically. In 2021–23 it catches more with on-time '
-                'readings, though that could be chance, and with late readings it does slightly '
+                'difference holds up statistically. In 2021–23 it catches more with 1-day-old '
+                'readings, though that could be chance, and with older readings it does slightly '
                 'worse because of extra false alarms. In 2024–25 the few bad days were sudden '
                 'spikes that nothing predicted.</div>', unsafe_allow_html=True)
     with b:
@@ -987,8 +993,9 @@ with tab_method:
             panel_head("Limitations")
             st.markdown(
                 '<ul class="limits">'
-                '<li>Readings arrive about 40 hours late, so today\'s forecast uses data from '
-                'the day before yesterday. Fresher data would help more than a better model.</li>'
+                '<li>The API publishes readings in batches, so the newest complete day is '
+                'usually yesterday but can be two or three days old. Accuracy falls quickly as '
+                'readings age; the forecast shows how old its inputs are.</li>'
                 '<li>It forecasts smoke that builds over several days. Sudden one-day spikes, '
                 'such as a nearby burn, come without warning.</li>'
                 '<li>Advisories are set so missing a bad day costs ten times a false alarm, so '

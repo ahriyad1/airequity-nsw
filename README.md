@@ -42,17 +42,18 @@ The system is decision support only. It does not replace official NSW health adv
 **How well it works.** Each station is held out in turn and each test period
 is unseen in training (`src/analysis/daily_target.py`, results in `results/`).
 
-| Test period (bad station-days)                               | Model | "Newest day repeats" |
-| ------------------------------------------------------------ | ----- | -------------------- |
-| 2019–20 smoke (494), readings on time                        | 59%   | 44%                  |
-| 2019–20 smoke, readings 1 day late (as for today's forecast) | 35%   | 29%                  |
-| 2021–23 (103), readings on time                              | 53%   | 34%                  |
-| 2021–23, readings 1 day late                                 | 17%   | 16%                  |
-| 2024–25 (21), readings on time                               | 3/21  | 1/21                 |
+| Test period (bad station-days)                 | Model | "Newest day repeats" |
+| ---------------------------------------------- | ----- | -------------------- |
+| 2019–20 smoke (494), newest readings 1 day old | 59%   | 44%                  |
+| 2019–20 smoke, newest readings 2 days old      | 35%   | 29%                  |
+| 2021–23 (103), newest readings 1 day old       | 53%   | 34%                  |
+| 2021–23, newest readings 2 days old            | 17%   | 16%                  |
+| 2024–25 (21), newest readings 1 day old        | 3/21  | 1/21                 |
 
 The model helps most during smoke that builds over several days; it cannot see
-sudden one-day spikes coming. Readings reach us about 40 hours late, which costs
-more skill than anything in the model. Forecasting from neighbours only is
+sudden one-day spikes coming. The NSW API publishes in batches, so the newest
+complete day is usually yesterday but can be two or three days old, and older
+inputs cost more skill than anything in the model. Forecasting from neighbours only is
 nearly as good as with the station's own sensor (56% vs 59% of smoke-year bad
 days), because smoke covers the whole basin.
 

@@ -90,6 +90,27 @@ daily smoke advisories, neighbouring stations carry most of the information.
 intervals and sign tests); gradient-boosting comparison in
 `results/daily_target_hgb_*`.
 
+### Data freshness corrected; publishing made safe
+
+**Previous state.** We reported that station readings reach us about 40 hours
+late. The workflow fetched observations up to "1 day ago" in UTC, and because
+the API treats the end date as exclusive, a whole day was silently lost. Every
+live forecast was built from readings three days old.
+
+**Current state.** The workflow fetches up to today's date in Sydney time
+(`9c7d5f4`). On 17 October 2026 a run at 1:22 am found readings only to 11 pm
+on the 14th, while a run 47 minutes later found every hour of the 16th: the API
+publishes in batches. The forecast finds the newest complete day itself and
+trains for the matching delay; the dashboard shows the age of the inputs and
+labels a forecast "not tested" when its inputs are older than any validated.
+
+Two runs that started close together collided when both committed forecast
+files, which Git cannot merge. Each run now starts from the newest main, stages
+only its forecast files and retries up to three times (`fc2935b`).
+
+**Why.** Input age matters more than any model change: in the 2019–20 smoke
+the model caught 59% of bad days with 1-day-old readings and 35% with 2-day-old.
+
 ### Day-ahead weather forecasts tested, not adopted
 
 **Question.** Would tomorrow's weather forecast improve the daily advisory?
