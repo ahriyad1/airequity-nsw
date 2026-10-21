@@ -1,0 +1,98 @@
+{
+  "weights": {
+    "delay0_with_sensor": {
+      "pm_mean": 0.0,
+      "pm_max": 0.0,
+      "pm_min": 0.0,
+      "pm_eve": 0.752,
+      "pm_mean_lag1": 0.0,
+      "pm_mean_lag2": 0.275,
+      "pm_mean_3d": 0.208,
+      "net_mean": 0.028,
+      "net_max": 0.538,
+      "net_n_over": 0.086,
+      "net_idw": 0.0,
+      "net_nearest": 0.0,
+      "net_mean_lag1": 0.0,
+      "net_idw_lag1": 0.0
+    },
+    "delay0_without_sensor": {
+      "net_mean": 0.205,
+      "net_max": 0.574,
+      "net_n_over": 0.097,
+      "net_idw": 0.0,
+      "net_nearest": 0.309,
+      "net_mean_lag1": 0.0,
+      "net_idw_lag1": 0.084
+    },
+    "delay1_with_sensor": {
+      "pm_mean": 0.0,
+      "pm_max": 0.0,
+      "pm_min": 0.0,
+      "pm_eve": 0.05,
+      "pm_mean_lag1": 0.0,
+      "pm_mean_lag2": 0.1,
+      "pm_mean_3d": 0.52,
+      "net_mean": 0.121,
+      "net_max": 0.231,
+      "net_n_over": 0.005,
+      "net_idw": 0.0,
+      "net_nearest": 0.0,
+      "net_mean_lag1": 0.177,
+      "net_idw_lag1": 0.0
+    },
+    "delay1_without_sensor": {
+      "net_mean": 0.064,
+      "net_max": 0.234,
+      "net_n_over": 0.022,
+      "net_idw": 0.205,
+      "net_nearest": 0.059,
+      "net_mean_lag1": 0.506,
+      "net_idw_lag1": 0.0
+    }
+  },
+  "permutation_2019_20": {
+    "with_sensor": {
+      "bad_days": 494,
+      "caught": 289,
+      "avg_precision": 0.464,
+      "shuffled": {
+        "Own sensor: evening mean": {
+          "caught": 237.2,
+          "avg_precision": 0.378
+        },
+        "Own sensor: base day mean, max, min": {
+          "caught": 253.9,
+          "avg_precision": 0.453
+        },
+        "Own sensor: earlier days": {
+          "caught": 284.1,
+          "avg_precision": 0.457
+        },
+        "Neighbours: base day": {
+          "caught": 104.3,
+          "avg_precision": 0.232
+        },
+        "Neighbours: previous day": {
+          "caught": 289.0,
+          "avg_precision": 0.464
+        }
+      }
+    },
+    "without_sensor": {
+      "bad_days": 494,
+      "caught": 278,
+      "avg_precision": 0.384,
+      "shuffled": {
+        "Neighbours: base day": {
+          "caught": 31.1,
+          "avg_precision": 0.049
+        },
+        "Neighbours: previous day": {
+          "caught": 278.0,
+          "avg_precision": 0.384
+        }
+      }
+    }
+  }
+}
