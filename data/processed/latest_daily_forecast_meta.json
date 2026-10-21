@@ -1,8 +1,8 @@
 {
-  "issued_at": "2026-10-21T16:20:00",
+  "issued_at": "2026-10-22T10:58:00",
   "timezone": "Australia/Sydney",
-  "observations_up_to": "2026-10-20T23:00:00",
-  "base_day": "2026-10-20",
+  "observations_up_to": "2026-10-21T23:00:00",
+  "base_day": "2026-10-21",
   "pm25_threshold_ug_m3": 25.0,
   "min_valid_hours": 18,
   "decision_threshold": 0.0909,
@@ -16,7 +16,7 @@
   "forecasts": [
     {
       "horizon": "today",
-      "target_day": "2026-10-21",
+      "target_day": "2026-10-22",
       "delay_days": 0,
       "inputs_age_days": 1,
       "stations_on_advisory_with_sensor": 0,
@@ -128,7 +128,7 @@
     },
     {
       "horizon": "tomorrow",
-      "target_day": "2026-10-22",
+      "target_day": "2026-10-23",
       "delay_days": 1,
       "inputs_age_days": 2,
       "stations_on_advisory_with_sensor": 0,
@@ -239,5 +239,5 @@
       }
     }
   ],
-  "generated": "2026-10-21T05:20:40+00:00"
+  "generated": "2026-10-21T23:58:43+00:00"
 }
